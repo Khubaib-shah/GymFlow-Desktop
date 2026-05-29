@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Owner {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Member {
+  id              String         @id @default(cuid())
+  firstName       String
+  lastName        String
+  email           String?
+  phone           String?
+  photoPath       String?
+  cnic            String?        @unique
+  dob             DateTime?
+  gender          String?
+  address         String?
+  biometricId     String?        @unique
+  membershipStart DateTime?
+  membershipEnd   DateTime?
+  status          String         @default("ACTIVE") // ACTIVE, EXPIRED
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  trainerId       String?
+  trainer         Trainer?       @relation(fields: [trainerId], references: [id])
+  
+  planId          String?
+  plan            MembershipPlan? @relation(fields: [planId], references: [id])
+
+  attendances     Attendance[]
+  payments        Payment[]
+}
+
+model Trainer {
+  id        String   @id @default(cuid())
+  firstName String
+  lastName  String
+  phone     String?
+  specialty String?
+  cnic      String?   @unique
+  dob       DateTime?
+  gender    String?
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  members   Member[]
+}
+
+model MembershipPlan {
+  id          String   @id @default(cuid())
+  name        String
+  durationDays Int
+  price       Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  members     Member[]
+}
+
+model Attendance {
+  id          String   @id @default(cuid())
+  memberId    String
+  member      Member   @relation(fields: [memberId], references: [id])
+  checkInTime  DateTime
+  checkOutTime DateTime?
+  method       String   @default("BIOMETRIC") // BIOMETRIC, MANUAL
+  createdAt   DateTime @default(now())
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  memberId    String
+  member      Member   @relation(fields: [memberId], references: [id])
+  planId      String?
+  amount      Float
+  paymentDate DateTime @default(now())
+  method      String   @default("CASH") // CASH, CARD, TRANSFER
+  notes       String?
+  createdAt   DateTime @default(now())
+}
