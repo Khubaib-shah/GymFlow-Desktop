@@ -33,6 +33,7 @@ export default function Trainers() {
     cnic: '', dob: '', gender: '', address: '' 
   });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
 
   // Profile modal state
   const [profileTrainer, setProfileTrainer] = useState<any>(null);
@@ -67,32 +68,34 @@ export default function Trainers() {
       });
       setEditingId(null);
     }
+    setErrorMsg('');
     setIsModalOpen(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg('');
 
     // Validations
     if (formData.dob) {
       const age = calculateAge(formData.dob);
       if (age > 65) {
-        alert("Trainer cannot be older than 65 years.");
+        setErrorMsg("Trainer cannot be older than 65 years.");
         return;
       }
       if (age < 18) {
-        alert("Trainer must be at least 18 years old.");
+        setErrorMsg("Trainer must be at least 18 years old.");
         return;
       }
     }
     
     if (formData.cnic && formData.cnic.length !== 15) {
-      alert("Please enter a complete 13-digit CNIC.");
+      setErrorMsg("Please enter a complete 13-digit CNIC.");
       return;
     }
 
     if (formData.phone && formData.phone.length !== 12) {
-      alert("Please enter a complete 11-digit phone number.");
+      setErrorMsg("Please enter a complete 11-digit phone number.");
       return;
     }
 
@@ -317,6 +320,11 @@ export default function Trainers() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="glass w-full max-w-lg rounded-2xl p-6 border border-[#2a2e37] shadow-2xl relative">
             <h2 className="text-xl font-bold text-white mb-4">{editingId ? 'Edit Trainer' : 'Add Trainer'}</h2>
+            {errorMsg && (
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">
+                {errorMsg}
+              </div>
+            )}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>

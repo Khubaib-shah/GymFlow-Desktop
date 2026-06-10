@@ -16,6 +16,7 @@
   "build": {
     "appId": "com.gymflow.saas",
     "productName": "Gymflow Desktop",
+    "icon": "public/assets/logo/logo3.png",
     "directories": {
       "output": "release"
     },

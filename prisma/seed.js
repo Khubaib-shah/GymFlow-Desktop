@@ -12,11 +12,11 @@ async function main() {
   // ─── 1. OWNER ───────────────────────────────────────────────────────────────
   const hashedPassword = await bcrypt.hash('admin123', 10);
   const owner = await prisma.owner.upsert({
-    where: { username: 'admin' },
+    where: { username: 'admin@gymflow.com' },
     update: {},
-    create: { username: 'admin', password: hashedPassword },
+    create: { username: 'admin@gymflow.com', password: hashedPassword },
   });
-  console.log(`✅ Owner created: admin / admin123`);
+  console.log(`✅ Owner created: admin@gymflow.com / admin123`);
 
   // ─── 2. MEMBERSHIP PLANS ────────────────────────────────────────────────────
   const plans = await Promise.all([

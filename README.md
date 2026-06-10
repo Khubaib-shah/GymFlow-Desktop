@@ -1,46 +1,68 @@
-# GMS SaaS - Gym Management System
+<div align="center">
+  <h1>💪 GymFlow Desktop</h1>
+  <p><strong>A modern, high-performance Desktop Gym Management System built with Electron and React.</strong></p>
+  <p>Designed to provide a seamless, offline-first experience for gym owners to manage members, trainers, hardware biometric attendance, and billing.</p>
+</div>
 
-A modern, full-stack Gym Management Solution designed for scalability and performance. Built with Next.js 16, TypeScript, and MongoDB.
+---
 
-## 📋 Overview
+## ✨ Why GymFlow?
 
-**GMS SaaS** is a comprehensive platform for gym owners to manage their fitness centers, members, trainers, and finances. It features a multi-tenant architecture (SaaS) where a single platform can host multiple gyms, each with its own staff and members.
+GymFlow is designed from the ground up as a native desktop application. It avoids the latency and constant internet requirements of web-based SaaS by running locally on your hardware, utilizing a robust SQLite database while maintaining a stunning, modern user interface.
 
-## 🚀 Key Features
+Whether you are a **Gym Owner** looking for a reliable daily-driver system, or a **Developer** interested in seeing how modern web technologies (React 19, Tailwind v4, Prisma) map to desktop applications via Electron—GymFlow is built for you.
 
-- **Multi-Tenant Architecture**: Support for multiple gyms on a single platform.
-- **Member Management**: Comprehensive profiles, membership tracking, and QR check-ins.
-- **Staff Roles**: Granular permissions for Owners, Managers, Trainers, and Receptionists.
-- **Workout Planning**: Create exercise templates and assign personalized workout plans to members.
-- **Financial Tracking**: Record payments, track subscriptions, and monitor platform-level revenue.
-- **Analytics**: Real-time dashboards with performance KPIs and revenue trends.
-- **Attendance**: Automated attendance tracking with QR code support.
+## 🚀 Real Features
 
-## 🛠️ Tech Stack
+Every feature listed here is actively supported in the schema and source code:
 
-- **Framework**: [Next.js 16](https://nextjs.org/) (App Router)
-- **Frontend**: React 19, TypeScript, Tailwind CSS 4
-- **UI Components**: Radix UI, shadcn/ui
-- **Database**: MongoDB with Mongoose ODM
-- **Authentication**: NextAuth.js
+- **👥 Member Management**: Comprehensive member profiling including personal details, CNIC tracking, profile photos, and membership start/end dates.
+- **🛡️ Biometric Integration**: Direct hardware integration with ZKTeco biometric devices using `node-zklib` for seamless, automated attendance tracking.
+- **🏋️ Trainer Assignment**: Manage gym staff, track their specialties, and seamlessly assign trainers to specific gym members.
+- **💳 Billing & Payments**: Define custom membership plans (duration, pricing) and record payments via Cash, Card, or Bank Transfer.
+- **📊 Analytics & Dashboards**: Built-in interactive charts powered by Recharts for viewing attendance trends and financial data.
+- **🔔 Notifications**: Ready-to-use integrations for automated SMS (via Twilio) and Email (via Nodemailer) for membership expiries and alerts.
+- **🔒 Secure Authentication**: Local owner accounts protected by `bcryptjs` encryption and JWT.
+
+## 💻 Tech Stack
+
+This project utilizes a bleeding-edge modern web stack wrapped in Electron:
+
+**Core**
+- **Framework**: [Electron](https://www.electronjs.org/) (v42) + [React](https://react.dev/) 19
+- **Build Tool**: [Vite](https://vitejs.dev/) + `tsup`
+- **Language**: TypeScript
+
+**UI & Styling**
+- **Styling**: Tailwind CSS v4
+- **Components**: Radix UI Primitives (Accessible, Headless UI)
+- **Icons**: Lucide React
+- **Data Visualization**: Recharts
+
+**Data & State**
+- **Database**: SQLite (Local, Offline-first via `dev.db`)
+- **ORM**: [Prisma](https://www.prisma.io/)
 - **State Management**: Zustand
-- **Charts**: Recharts
-- **Payment Integration**: Stripe (Service ready)
+- **Forms & Validation**: React Hook Form + Zod
 
-## 🏗️ Getting Started
+**Hardware & External Services**
+- **Biometrics**: `node-zklib`
+- **Communications**: Twilio SDK & Nodemailer
+
+## 🛠️ Getting Started (For Developers)
+
+Follow these steps to run the application locally in development mode.
 
 ### Prerequisites
-
-- Node.js 18.0+
-- MongoDB instance (Local or Atlas)
-- npm or pnpm
+- [Node.js](https://nodejs.org/) (v18 or higher recommended)
+- Git
 
 ### Installation
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/Khubaib-shah/GMS-saas.git
-   cd GMS-saas
+   git clone https://github.com/Khubaib-shah/Gym-management-system-desktop-app.git
+   cd Gym-management-system-desktop-app
    ```
 
 2. **Install dependencies**
@@ -48,47 +70,39 @@ A modern, full-stack Gym Management Solution designed for scalability and perfor
    npm install
    ```
 
-3. **Configure Environment**
-   Create a `.env` file in the root directory:
-   ```env
-   MONGODB_URL=your_mongodb_connection_string
-   NEXTAUTH_SECRET=your_nextauth_secret
-   NEXTAUTH_URL=http://localhost:3000
-   ```
-
-4. **Seed the Database**
-   Populate the database with comprehensive Pakistani-localized test data:
+3. **Initialize the Database**
+   The application uses a local SQLite database (`prisma/dev.db`). Ensure your Prisma schema is synced:
    ```bash
-   npm run seed
+   npx prisma db push
    ```
-   *This will generate a `seed_pakistani_credentials.json` file with login details for test accounts.*
 
-5. **Start Development**
+4. **Start the Development Server**
+   This command concurrently starts the Vite dev server for the React frontend, and compiles the Electron main process:
    ```bash
    npm run dev
    ```
 
+### Building for Production
+
+To package the application into a standalone Windows executable (`.exe`):
+
+```bash
+npm run build
+```
+This leverages `electron-builder` to bundle the app, Prisma engine, and SQLite database into the `release` folder.
+
 ## 📁 Project Structure
 
-- `/app`: Next.js App Router (Pages & API routes)
-- `/components`: Reusable UI components
-- `/lib`: Services, utilities, and shared logic
-- `/models`: Mongoose database schemas
-- `/scripts`: CLI scripts for database management and seeding
-- `/types`: Shared TypeScript definitions
-
-## 🔧 Available Scripts
-
-- `npm run dev`: Starts the development server.
-- `npm run build`: Builds the application for production.
-- `npm run start`: Starts the production server.
-- `npm run seed`: Cleans the database and seeds localized test data.
-- `npm run lint`: Runs ESLint for code quality checks.
+- `/electron` - Electron main process scripts and window management.
+- `/src` - React frontend application (Components, Pages, Hooks).
+- `/prisma` - Database schema (`schema.prisma`) and local SQLite file.
+- `/dist` - Compiled frontend assets.
+- `/dist-electron` - Compiled Electron backend assets.
 
 ## 🤝 Contributing
 
-This is a private project. For contributions, please branch from `main` and submit a Pull Request.
+Contributions are welcome! If you're a developer looking to improve the biometric hardware integration, UI responsiveness, or payment flows, feel free to submit a Pull Request.
 
 ## 📄 License
 
-Proprietary. All rights reserved.
+Proprietary. All rights reserved by Khubaib Shah.

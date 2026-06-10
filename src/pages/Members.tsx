@@ -34,6 +34,7 @@ export default function Members() {
     cnic: '', dob: '', gender: '', address: '', planId: '', trainerId: ''
   });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
 
   // Renew Modal State
   const [renewModalOpen, setRenewModalOpen] = useState(false);
@@ -75,37 +76,39 @@ export default function Members() {
       });
       setEditingId(null);
     }
+    setErrorMsg('');
     setIsModalOpen(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg('');
 
     // Validations
     if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-      alert("Please enter a valid email address.");
+      setErrorMsg("Please enter a valid email address.");
       return;
     }
 
     if (formData.dob) {
       const age = calculateAge(formData.dob);
       if (age > 65) {
-        alert("Member cannot be older than 65 years.");
+        setErrorMsg("Member cannot be older than 65 years.");
         return;
       }
       if (age < 12) {
-        alert("Member must be at least 12 years old.");
+        setErrorMsg("Member must be at least 12 years old.");
         return;
       }
     }
     
     if (formData.cnic && formData.cnic.length !== 15) {
-      alert("Please enter a complete 13-digit CNIC.");
+      setErrorMsg("Please enter a complete 13-digit CNIC.");
       return;
     }
 
     if (formData.phone && formData.phone.length !== 12) {
-      alert("Please enter a complete 11-digit phone number.");
+      setErrorMsg("Please enter a complete 11-digit phone number.");
       return;
     }
     
@@ -144,7 +147,7 @@ export default function Members() {
     e.preventDefault();
     if (!selectedRenewMember || !selectedPlanId) return;
 
-    const plan = plans.find(p => p.id === selectedPlanId);
+    const plan = plans.find((p: any) => p.id === selectedPlanId);
     if (!plan) return;
 
     let newStartDate = new Date();
@@ -327,6 +330,11 @@ export default function Members() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="glass w-full max-w-lg rounded-2xl p-6 border border-[#2a2e37] shadow-2xl relative">
             <h2 className="text-xl font-bold text-white mb-4">{editingId ? 'Edit Member' : 'Add Member'}</h2>
+            {errorMsg && (
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">
+                {errorMsg}
+              </div>
+            )}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -387,7 +395,7 @@ export default function Members() {
                   <label className="block text-sm font-medium text-gray-400 mb-1">Plan</label>
                   <select className="input-field" value={formData.planId || ''} onChange={e => setFormData({...formData, planId: e.target.value})}>
                     <option value="">No Plan</option>
-                    {plans.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -425,7 +433,7 @@ export default function Members() {
                   onChange={e => setSelectedPlanId(e.target.value)}
                 >
                   <option value="" disabled>Select a plan...</option>
-                  {plans.map(p => (
+                  {plans.map((p: any) => (
                     <option key={p.id} value={p.id}>{p.name} ({p.durationDays} Days - Rs {p.price})</option>
                   ))}
                 </select>
@@ -449,10 +457,10 @@ export default function Members() {
                 <span className="text-white font-medium">{selectedRenewMember.membershipEnd ? new Date(selectedRenewMember.membershipEnd).toLocaleDateString() : 'None'}</span>
               </div>
 
-              {plans.find(p => p.id === selectedPlanId) && (
+              {plans.find((p: any) => p.id === selectedPlanId) && (
                 <div className="bg-primary-600/10 p-3 rounded-lg border border-primary-500/20 text-sm text-primary-400 flex justify-between items-center">
                   <span>Amount to Pay:</span>
-                  <span className="text-white font-bold text-lg">Rs {plans.find(p => p.id === selectedPlanId)?.price.toFixed(2)}</span>
+                  <span className="text-white font-bold text-lg">Rs {plans.find((p: any) => p.id === selectedPlanId)?.price.toFixed(2)}</span>
                 </div>
               )}
 

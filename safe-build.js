@@ -66,13 +66,29 @@ try {
   // 6. Restore everything
   console.log('Restoring development environment...');
   if (fs.existsSync('dist-electron/node_modules')) {
-    fs.rmSync('dist-electron/node_modules', { recursive: true, force: true });
+    fs.rmSync('dist-electron/node_modules', { recursive: true, force: true, maxRetries: 5, retryDelay: 1000 });
   }
   if (fs.existsSync('node_modules')) {
-    fs.rmSync('node_modules', { recursive: true, force: true });
+    fs.rmSync('node_modules', { recursive: true, force: true, maxRetries: 5, retryDelay: 1000 });
   }
-  if (fs.existsSync('node_modules.bak')) {
-    fs.renameSync('node_modules.bak', 'node_modules');
+  
+  let renameRetries = 10;
+  while (renameRetries > 0) {
+    try {
+      if (fs.existsSync('node_modules.bak')) {
+        fs.renameSync('node_modules.bak', 'node_modules');
+      }
+      break;
+    } catch (e) {
+      if (e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'ENOTEMPTY') {
+        renameRetries--;
+        if (renameRetries === 0) throw e;
+        console.log(`Rename failed, retrying in 1s... (${10 - renameRetries}/10)`);
+        execSync('node -e "setTimeout(()=>{}, 1000)"');
+      } else {
+        throw e;
+      }
+    }
   }
   fs.renameSync('package.json.bak', 'package.json');
   if (fs.existsSync('package-lock.json.bak')) {
