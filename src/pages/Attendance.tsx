@@ -10,6 +10,7 @@ export default function Attendance() {
   const [memberSearch, setMemberSearch] = useState('');
   const [showMemberDropdown, setShowMemberDropdown] = useState(false);
   const [activeSession, setActiveSession] = useState<any>(null);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState('today');
@@ -63,19 +64,27 @@ export default function Attendance() {
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedMemberId) return;
+    setErrorMsg('');
     
-    await (window as any).api.attendance.manualEntry(selectedMemberId);
-    setIsModalOpen(false);
-    setSelectedMemberId('');
-    setMemberSearch('');
-    fetchLogs();
+    try {
+      await (window as any).api.attendance.manualEntry(selectedMemberId);
+      setIsModalOpen(false);
+      setSelectedMemberId('');
+      setMemberSearch('');
+      fetchLogs();
+    } catch (err: any) {
+      const msg = err.message || 'An error occurred';
+      setErrorMsg(msg.replace(/Error invoking remote method '.*?': Error: /, ''));
+    }
   };
 
   const filteredMembersForSearch = members.filter(m =>
-    memberSearch === '' ||
-    `${m.firstName} ${m.lastName}`.toLowerCase().includes(memberSearch.toLowerCase()) ||
-    (m.cnic && m.cnic.includes(memberSearch)) ||
-    (m.phone && m.phone.includes(memberSearch))
+    m.status === 'ACTIVE' && m.planId && (
+      memberSearch === '' ||
+      `${m.firstName} ${m.lastName || ''}`.toLowerCase().includes(memberSearch.toLowerCase()) ||
+      (m.cnic && m.cnic.includes(memberSearch)) ||
+      (m.phone && m.phone.includes(memberSearch))
+    )
   );
 
   const filteredLogs = logs.filter(log => {
@@ -244,6 +253,11 @@ export default function Attendance() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="glass w-full max-w-sm rounded-2xl p-6 border border-[#2a2e37] shadow-2xl relative">
             <h2 className="text-xl font-bold text-white mb-4">Manual Entry</h2>
+            {errorMsg && (
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">
+                {errorMsg}
+              </div>
+            )}
             <form onSubmit={handleManualSubmit} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Search Member</label>
@@ -282,10 +296,10 @@ export default function Attendance() {
                           }}
                         >
                           <div className="w-6 h-6 rounded-full bg-primary-600/20 text-primary-500 flex items-center justify-center text-xs font-bold flex-shrink-0">
-                            {m.firstName[0]}{m.lastName[0]}
+                            {m.firstName[0]}{m.lastName ? m.lastName[0] : ''}
                           </div>
                           <div>
-                            <div className="font-medium">{m.firstName} {m.lastName}</div>
+                            <div className="font-medium">{m.firstName} {m.lastName || ''}</div>
                             <div className="text-xs text-gray-500">{m.phone || m.cnic || 'No contact'}</div>
                           </div>
                         </button>
