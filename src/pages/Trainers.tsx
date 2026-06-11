@@ -159,10 +159,10 @@ export default function Trainers() {
             >
               <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-500 mb-4 p-1 shadow-lg shadow-purple-500/20">
                 <div className="w-full h-full bg-[#13151a] rounded-full flex items-center justify-center text-2xl font-bold text-white">
-                  {trainer.firstName[0]}{trainer.lastName[0]}
+                  {trainer.firstName[0]}{trainer.lastName ? trainer.lastName[0] : ''}
                 </div>
               </div>
-              <h3 className="text-lg font-bold text-white">{trainer.firstName} {trainer.lastName}</h3>
+              <h3 className="text-lg font-bold text-white">{trainer.firstName} {trainer.lastName || ''}</h3>
               <p className="text-sm text-primary-400 font-medium mt-1">{trainer.specialty || 'General Fitness'}</p>
               
               <div className="w-full h-px bg-gradient-to-r from-transparent via-[#2a2e37] to-transparent my-4"></div>
@@ -223,11 +223,11 @@ export default function Trainers() {
               <div className="flex items-end gap-5">
                 <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-500 p-1 shadow-xl shadow-purple-500/30 flex-shrink-0">
                   <div className="w-full h-full bg-[#13151a] rounded-full flex items-center justify-center text-3xl font-bold text-white">
-                    {profileTrainer.firstName[0]}{profileTrainer.lastName[0]}
+                    {profileTrainer.firstName[0]}{profileTrainer.lastName ? profileTrainer.lastName[0] : ''}
                   </div>
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold text-white">{profileTrainer.firstName} {profileTrainer.lastName}</h2>
+                  <h2 className="text-2xl font-bold text-white">{profileTrainer.firstName} {profileTrainer.lastName || ''}</h2>
                   <p className="text-primary-400 font-medium">{profileTrainer.specialty || 'General Fitness'}</p>
                   {profileTrainer.phone && <p className="text-gray-400 text-sm mt-1">{profileTrainer.phone}</p>}
                 </div>
@@ -285,10 +285,10 @@ export default function Trainers() {
                       <div key={m.id} className="flex items-center justify-between glass bg-[#0f1115]/50 rounded-lg px-4 py-3 border border-[#2a2e37]">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-primary-600/20 text-primary-500 flex items-center justify-center font-bold text-xs flex-shrink-0">
-                            {m.firstName[0]}{m.lastName[0]}
+                            {m.firstName[0]}{m.lastName ? m.lastName[0] : ''}
                           </div>
                           <div>
-                            <div className="text-sm font-medium text-white">{m.firstName} {m.lastName}</div>
+                            <div className="text-sm font-medium text-white">{m.firstName} {m.lastName || ''}</div>
                             <div className="text-xs text-gray-500">{m.phone || m.email || 'No contact'}</div>
                           </div>
                         </div>
@@ -333,7 +333,7 @@ export default function Trainers() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Last Name</label>
-                  <input required type="text" className="input-field" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} />
+                  <input type="text" className="input-field" value={formData.lastName || ''} onChange={e => setFormData({...formData, lastName: e.target.value})} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">

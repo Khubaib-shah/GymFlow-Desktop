@@ -198,6 +198,7 @@ async function syncZKTecoLogs(ip, port, prisma2) {
         where: { biometricId: log.deviceUserId }
       });
       if (member) {
+        if (member.status !== "ACTIVE" || !member.planId) continue;
         const existing = await prisma2.attendance.findFirst({
           where: {
             memberId: member.id,
@@ -283,6 +284,14 @@ function registerAttendanceHandlers(ipcMain2, prisma2) {
   ipcMain2.handle("attendance:manualEntry", async (_, memberId) => {
     const sixHoursAgo = /* @__PURE__ */ new Date();
     sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
+    const member = await prisma2.member.findUnique({ where: { id: memberId } });
+    if (!member) throw new Error("Member not found");
+    if (member.status !== "ACTIVE") {
+      throw new Error(`Cannot check in/out. Member is ${member.status.toLowerCase()}.`);
+    }
+    if (!member.planId) {
+      throw new Error("Cannot check in/out. Member does not have an active plan.");
+    }
     const activeSession = await prisma2.attendance.findFirst({
       where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },
       orderBy: { checkInTime: "desc" }

@@ -28,6 +28,8 @@ export async function syncZKTecoLogs(ip: string, port: number, prisma: any) {
       });
 
       if (member) {
+        if (member.status !== "ACTIVE" || !member.planId) continue;
+
         // Check if attendance already exists to avoid duplicates
         const existing = await prisma.attendance.findFirst({
           where: {

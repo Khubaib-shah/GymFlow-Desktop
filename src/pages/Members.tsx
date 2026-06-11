@@ -193,7 +193,7 @@ export default function Members() {
     const term = searchQuery.toLowerCase();
     const matchesSearch = (
       m.firstName.toLowerCase().includes(term) ||
-      m.lastName.toLowerCase().includes(term) ||
+      (m.lastName && m.lastName.toLowerCase().includes(term)) ||
       (m.cnic && m.cnic.toLowerCase().includes(term)) ||
       (m.phone && m.phone.toLowerCase().includes(term)) ||
       (m.email && m.email.toLowerCase().includes(term))
@@ -288,10 +288,10 @@ export default function Members() {
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-primary-600/20 text-primary-500 flex items-center justify-center font-bold">
-                          {member.firstName[0]}{member.lastName[0]}
+                          {member.firstName[0]}{member.lastName ? member.lastName[0] : ''}
                         </div>
                         <div>
-                          <div className="font-medium text-white">{member.firstName} {member.lastName}</div>
+                          <div className="font-medium text-white">{member.firstName} {member.lastName || ''}</div>
                           <div className="text-xs text-gray-500">{member.cnic || 'No CNIC'}</div>
                         </div>
                       </div>
@@ -311,7 +311,7 @@ export default function Members() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="text-gray-300">{member.plan?.name || 'No Plan'}</div>
-                      <div className="text-xs text-gray-500">Trainer: {member.trainer ? `${member.trainer.firstName} ${member.trainer.lastName}` : 'None'}</div>
+                      <div className="text-xs text-gray-500">Trainer: {member.trainer ? `${member.trainer.firstName} ${member.trainer.lastName || ''}` : 'None'}</div>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button onClick={() => openRenewModal(member)} className="text-primary-400 hover:text-primary-300 transition-colors mr-3 font-medium">Renew</button>
@@ -343,7 +343,7 @@ export default function Members() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Last Name</label>
-                  <input required type="text" className="input-field" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} />
+                  <input type="text" className="input-field" value={formData.lastName || ''} onChange={e => setFormData({...formData, lastName: e.target.value})} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">

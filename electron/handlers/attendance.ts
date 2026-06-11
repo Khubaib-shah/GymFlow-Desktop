@@ -58,6 +58,15 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
     const sixHoursAgo = new Date();
     sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
     
+    const member = await prisma.member.findUnique({ where: { id: memberId } });
+    if (!member) throw new Error("Member not found");
+    if (member.status !== "ACTIVE") {
+      throw new Error(`Cannot check in/out. Member is ${member.status.toLowerCase()}.`);
+    }
+    if (!member.planId) {
+      throw new Error("Cannot check in/out. Member does not have an active plan.");
+    }
+
     // Check if there's an active session
     const activeSession = await prisma.attendance.findFirst({
       where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },

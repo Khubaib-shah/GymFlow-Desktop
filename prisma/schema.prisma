@@ -19,7 +19,7 @@ model Owner {
 model Member {
   id              String         @id @default(cuid())
   firstName       String
-  lastName        String
+  lastName        String?
   email           String?
   phone           String?
   photoPath       String?
@@ -35,10 +35,10 @@ model Member {
   updatedAt       DateTime       @updatedAt
   
   trainerId       String?
-  trainer         Trainer?       @relation(fields: [trainerId], references: [id])
+  trainer         Trainer?       @relation(fields: [trainerId], references: [id], onDelete: SetNull)
   
   planId          String?
-  plan            MembershipPlan? @relation(fields: [planId], references: [id])
+  plan            MembershipPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
 
   attendances     Attendance[]
   payments        Payment[]
@@ -47,7 +47,7 @@ model Member {
 model Trainer {
   id        String   @id @default(cuid())
   firstName String
-  lastName  String
+  lastName  String?
   phone     String?
   specialty String?
   cnic      String?   @unique
@@ -74,7 +74,7 @@ model MembershipPlan {
 model Attendance {
   id          String   @id @default(cuid())
   memberId    String
-  member      Member   @relation(fields: [memberId], references: [id])
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
   checkInTime  DateTime
   checkOutTime DateTime?
   method       String   @default("BIOMETRIC") // BIOMETRIC, MANUAL
@@ -84,7 +84,7 @@ model Attendance {
 model Payment {
   id          String   @id @default(cuid())
   memberId    String
-  member      Member   @relation(fields: [memberId], references: [id])
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
   planId      String?
   amount      Float
   paymentDate DateTime @default(now())
