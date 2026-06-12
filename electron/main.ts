@@ -85,7 +85,7 @@ app.whenReady().then(async () => {
   registerPlansHandlers(ipcMain, prisma);
   registerAttendanceHandlers(ipcMain, prisma);
   registerPaymentsHandlers(ipcMain, prisma);
-  registerSystemHandlers(ipcMain, dbPath);
+  registerSystemHandlers(ipcMain, dbPath, prisma);
 
   createWindow();
 

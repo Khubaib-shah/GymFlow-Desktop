@@ -30,7 +30,7 @@ export default function Members() {
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState<any>({ 
-    firstName: '', lastName: '', email: '', phone: '', status: 'ACTIVE',
+    firstName: '', lastName: '', email: '', phone: '', status: 'LEAD',
     cnic: '', dob: '', gender: '', address: '', planId: '', trainerId: ''
   });
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -71,7 +71,7 @@ export default function Members() {
       setEditingId(member.id);
     } else {
       setFormData({ 
-        firstName: '', lastName: '', email: '', phone: '', status: 'ACTIVE',
+        firstName: '', lastName: '', email: '', phone: '', status: 'LEAD',
         cnic: '', dob: '', gender: '', address: '', planId: '', trainerId: ''
       });
       setEditingId(null);
@@ -93,22 +93,22 @@ export default function Members() {
     if (formData.dob) {
       const age = calculateAge(formData.dob);
       if (age > 65) {
-        setErrorMsg("Member cannot be older than 65 years.");
+        setErrorMsg("The member cannot be over 65 years old.");
         return;
       }
       if (age < 12) {
-        setErrorMsg("Member must be at least 12 years old.");
+        setErrorMsg("The member must be at least 12 years old.");
         return;
       }
     }
     
     if (formData.cnic && formData.cnic.length !== 15) {
-      setErrorMsg("Please enter a complete 13-digit CNIC.");
+      setErrorMsg("Please enter a valid 13-digit CNIC.");
       return;
     }
 
     if (formData.phone && formData.phone.length !== 12) {
-      setErrorMsg("Please enter a complete 11-digit phone number.");
+      setErrorMsg("Please enter a valid 11-digit phone number.");
       return;
     }
     
@@ -183,6 +183,7 @@ export default function Members() {
 
   const statusCounts = {
     ALL: members.length,
+    LEAD: members.filter(m => m.status === 'LEAD').length,
     ACTIVE: members.filter(m => m.status === 'ACTIVE').length,
     EXPIRED: members.filter(m => m.status === 'EXPIRED').length,
     INACTIVE: members.filter(m => m.status === 'INACTIVE').length,
@@ -204,6 +205,7 @@ export default function Members() {
 
   const filterConfig: { key: string; label: string; color: string; activeColor: string }[] = [
     { key: 'ALL',       label: 'All Members', color: 'border-[#2a2e37] text-gray-400 hover:text-white hover:border-gray-500',          activeColor: 'bg-white/10 border-white/30 text-white' },
+    { key: 'LEAD',      label: 'Leads',       color: 'border-[#2a2e37] text-gray-400 hover:text-blue-400 hover:border-blue-500/40',    activeColor: 'bg-blue-500/10 border-blue-500/40 text-blue-400' },
     { key: 'ACTIVE',    label: 'Active',      color: 'border-[#2a2e37] text-gray-400 hover:text-green-400 hover:border-green-500/40',  activeColor: 'bg-green-500/10 border-green-500/40 text-green-400' },
     { key: 'EXPIRED',   label: 'Expired',     color: 'border-[#2a2e37] text-gray-400 hover:text-red-400 hover:border-red-500/40',    activeColor: 'bg-red-500/10 border-red-500/40 text-red-400' },
     { key: 'INACTIVE',  label: 'Inactive',    color: 'border-[#2a2e37] text-gray-400 hover:text-yellow-400 hover:border-yellow-500/40', activeColor: 'bg-yellow-500/10 border-yellow-500/40 text-yellow-400' },
@@ -302,9 +304,12 @@ export default function Members() {
                     </td>
                     <td className="px-6 py-4">
                       <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                        member.status === 'ACTIVE' 
-                          ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                          : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                        member.status === 'ACTIVE' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
+                        member.status === 'LEAD' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                        member.status === 'EXPIRED' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                        member.status === 'INACTIVE' ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' :
+                        member.status === 'SUSPENDED' ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' :
+                        'bg-gray-500/10 text-gray-400 border border-gray-500/20'
                       }`}>
                         {member.status}
                       </span>
@@ -385,6 +390,7 @@ export default function Members() {
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Status</label>
                   <select className="input-field" value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}>
+                    <option value="LEAD">Lead</option>
                     <option value="ACTIVE">Active</option>
                     <option value="INACTIVE">Inactive</option>
                     <option value="SUSPENDED">Suspended</option>
@@ -393,7 +399,11 @@ export default function Members() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Plan</label>
-                  <select className="input-field" value={formData.planId || ''} onChange={e => setFormData({...formData, planId: e.target.value})}>
+                  <select className="input-field" value={formData.planId || ''} onChange={e => {
+                    const planId = e.target.value;
+                    const status = (planId && formData.status === 'LEAD') ? 'ACTIVE' : formData.status;
+                    setFormData({...formData, planId, status});
+                  }}>
                     <option value="">No Plan</option>
                     {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>

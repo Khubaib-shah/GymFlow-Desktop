@@ -74,6 +74,7 @@ export default function Dashboard() {
   threeDaysFromNow.setDate(todayDate.getDate() + 3);
 
   const alertMembers = filteredMembers.filter(m => {
+    if (m.status === 'LEAD' || m.status === 'INACTIVE' || m.status === 'SUSPENDED') return false;
     if (!m.membershipEnd) return true; // No membership end date = needs attention
     const endDate = new Date(m.membershipEnd);
     return endDate <= threeDaysFromNow;

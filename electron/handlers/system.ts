@@ -1,8 +1,9 @@
 import { app, dialog, BrowserWindow } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import type { PrismaClient } from '@prisma/client';
 
-export function registerSystemHandlers(ipcMain: any, dbPath: string) {
+export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: PrismaClient) {
   ipcMain.handle('system:backupDb', async () => {
     const win = BrowserWindow.getFocusedWindow();
     if (!win) return { success: false, error: 'No focused window' };
@@ -16,7 +17,9 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string) {
     if (canceled || !filePath) return { success: false, error: 'User canceled' };
 
     try {
+      await prisma.$disconnect();
       fs.copyFileSync(dbPath, filePath);
+      await prisma.$connect();
       return { success: true, filePath };
     } catch (error: any) {
       console.error('Backup error:', error);
@@ -41,12 +44,18 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string) {
     if (canceled || filePaths.length === 0) return { success: false, error: 'User canceled' };
 
     try {
+      await prisma.$disconnect();
+      
+      if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
+      if (fs.existsSync(`${dbPath}-shm`)) fs.unlinkSync(`${dbPath}-shm`);
+      
       fs.copyFileSync(filePaths[0], dbPath);
       app.relaunch();
       app.exit(0);
       return { success: true };
     } catch (error: any) {
       console.error('Restore error:', error);
+      await prisma.$connect().catch(() => {});
       return { success: false, error: error.message };
     }
   });
@@ -55,6 +64,8 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string) {
   ipcMain.handle('system:resetDb', async () => {
     try {
       const isDev = !app.isPackaged;
+
+      await prisma.$disconnect();
 
       if (isDev) {
         // In development: use the sqlite3 module to delete all rows from each table
@@ -73,6 +84,8 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string) {
           });
         });
         db.close();
+        
+        await prisma.$connect();
         return { success: true };
       } else {
         // In production: overwrite the user db with the pristine seed database, then relaunch
@@ -80,6 +93,10 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string) {
         if (!fs.existsSync(pristineDb)) {
           return { success: false, error: 'Pristine database not found in app resources.' };
         }
+        
+        if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
+        if (fs.existsSync(`${dbPath}-shm`)) fs.unlinkSync(`${dbPath}-shm`);
+
         fs.copyFileSync(pristineDb, dbPath);
         app.relaunch();
         app.exit(0);
@@ -87,6 +104,7 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string) {
       }
     } catch (error: any) {
       console.error('Reset DB error:', error);
+      await prisma.$connect().catch(() => {});
       return { success: false, error: error.message };
     }
   });

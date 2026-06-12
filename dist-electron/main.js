@@ -287,10 +287,10 @@ function registerAttendanceHandlers(ipcMain2, prisma2) {
     const member = await prisma2.member.findUnique({ where: { id: memberId } });
     if (!member) throw new Error("Member not found");
     if (member.status !== "ACTIVE") {
-      throw new Error(`Cannot check in/out. Member is ${member.status.toLowerCase()}.`);
+      throw new Error(`This member cannot check in because their status is ${member.status.toLowerCase()}.`);
     }
     if (!member.planId) {
-      throw new Error("Cannot check in/out. Member does not have an active plan.");
+      throw new Error("This member cannot check in because they don't have an active plan.");
     }
     const activeSession = await prisma2.attendance.findFirst({
       where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },
@@ -340,7 +340,7 @@ function registerPaymentsHandlers(ipcMain2, prisma2) {
 var import_electron = require("electron");
 var import_fs = __toESM(require("fs"));
 var import_path2 = __toESM(require("path"));
-function registerSystemHandlers(ipcMain2, dbPath2) {
+function registerSystemHandlers(ipcMain2, dbPath2, prisma2) {
   ipcMain2.handle("system:backupDb", async () => {
     const win = import_electron.BrowserWindow.getFocusedWindow();
     if (!win) return { success: false, error: "No focused window" };
@@ -351,7 +351,9 @@ function registerSystemHandlers(ipcMain2, dbPath2) {
     });
     if (canceled || !filePath) return { success: false, error: "User canceled" };
     try {
+      await prisma2.$disconnect();
       import_fs.default.copyFileSync(dbPath2, filePath);
+      await prisma2.$connect();
       return { success: true, filePath };
     } catch (error) {
       console.error("Backup error:", error);
@@ -371,18 +373,24 @@ function registerSystemHandlers(ipcMain2, dbPath2) {
     });
     if (canceled || filePaths.length === 0) return { success: false, error: "User canceled" };
     try {
+      await prisma2.$disconnect();
+      if (import_fs.default.existsSync(`${dbPath2}-wal`)) import_fs.default.unlinkSync(`${dbPath2}-wal`);
+      if (import_fs.default.existsSync(`${dbPath2}-shm`)) import_fs.default.unlinkSync(`${dbPath2}-shm`);
       import_fs.default.copyFileSync(filePaths[0], dbPath2);
       import_electron.app.relaunch();
       import_electron.app.exit(0);
       return { success: true };
     } catch (error) {
       console.error("Restore error:", error);
+      await prisma2.$connect().catch(() => {
+      });
       return { success: false, error: error.message };
     }
   });
   ipcMain2.handle("system:resetDb", async () => {
     try {
       const isDev2 = !import_electron.app.isPackaged;
+      await prisma2.$disconnect();
       if (isDev2) {
         const sqlite3 = require("sqlite3").verbose();
         const db = new sqlite3.Database(dbPath2);
@@ -400,12 +408,15 @@ function registerSystemHandlers(ipcMain2, dbPath2) {
           });
         });
         db.close();
+        await prisma2.$connect();
         return { success: true };
       } else {
         const pristineDb = import_path2.default.join(process.resourcesPath, "dev.db");
         if (!import_fs.default.existsSync(pristineDb)) {
           return { success: false, error: "Pristine database not found in app resources." };
         }
+        if (import_fs.default.existsSync(`${dbPath2}-wal`)) import_fs.default.unlinkSync(`${dbPath2}-wal`);
+        if (import_fs.default.existsSync(`${dbPath2}-shm`)) import_fs.default.unlinkSync(`${dbPath2}-shm`);
         import_fs.default.copyFileSync(pristineDb, dbPath2);
         import_electron.app.relaunch();
         import_electron.app.exit(0);
@@ -413,6 +424,8 @@ function registerSystemHandlers(ipcMain2, dbPath2) {
       }
     } catch (error) {
       console.error("Reset DB error:", error);
+      await prisma2.$connect().catch(() => {
+      });
       return { success: false, error: error.message };
     }
   });
@@ -478,7 +491,7 @@ import_electron2.app.whenReady().then(async () => {
   registerPlansHandlers(import_electron2.ipcMain, prisma);
   registerAttendanceHandlers(import_electron2.ipcMain, prisma);
   registerPaymentsHandlers(import_electron2.ipcMain, prisma);
-  registerSystemHandlers(import_electron2.ipcMain, dbPath);
+  registerSystemHandlers(import_electron2.ipcMain, dbPath, prisma);
   createWindow();
   import_electron2.app.on("activate", () => {
     if (import_electron2.BrowserWindow.getAllWindows().length === 0) {
