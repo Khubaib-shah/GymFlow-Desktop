@@ -38,6 +38,11 @@ contextBridge.exposeInMainWorld('api', {
     getByMember: (memberId: string) => ipcRenderer.invoke('payments:getByMember', memberId),
     create: (data: any) => ipcRenderer.invoke('payments:create', data)
   },
+  trainerAttendance: {
+    getAll: () => ipcRenderer.invoke('trainerAttendance:getAll'),
+    manualEntry: (trainerId: string) => ipcRenderer.invoke('trainerAttendance:manualEntry', trainerId),
+    getActiveSession: (trainerId: string) => ipcRenderer.invoke('trainerAttendance:getActiveSession', trainerId),
+  },
   system: {
     getDbPath: () => ipcRenderer.invoke('system:getDbPath'),
     backupDb: () => ipcRenderer.invoke('system:backupDb'),

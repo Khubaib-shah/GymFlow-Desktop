@@ -2,6 +2,27 @@ import path from 'path';
 
 export function registerMembersHandlers(ipcMain: any, prisma: any, userDataPath: string) {
   ipcMain.handle('members:getAll', async () => {
+    const now = new Date();
+
+    // Auto-expire: ACTIVE members whose membership has ended
+    await prisma.member.updateMany({
+      where: {
+        status: 'ACTIVE',
+        membershipEnd: { lt: now }
+      },
+      data: { status: 'EXPIRED' }
+    });
+
+    // Auto-suspend: EXPIRED members whose membership ended more than 60 days ago
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+    await prisma.member.updateMany({
+      where: {
+        status: 'EXPIRED',
+        membershipEnd: { lt: sixtyDaysAgo }
+      },
+      data: { status: 'SUSPENDED' }
+    });
+
     return await prisma.member.findMany({
       include: {
         trainer: true,

@@ -3,17 +3,20 @@ import React, { useState, useEffect } from 'react';
 export default function Settings() {
   const [zkIp, setZkIp] = useState('192.168.1.201');
   const [zkPort, setZkPort] = useState('4370');
+  const [admissionFee, setAdmissionFee] = useState('4000');
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetting, setResetting] = useState(false);
   
   useEffect(() => {
     setZkIp(localStorage.getItem('zkteco_ip') || '192.168.1.201');
     setZkPort(localStorage.getItem('zkteco_port') || '4370');
+    setAdmissionFee(localStorage.getItem('admission_fee') || '4000');
   }, []);
 
   const saveSettings = () => {
     localStorage.setItem('zkteco_ip', zkIp);
     localStorage.setItem('zkteco_port', zkPort);
+    localStorage.setItem('admission_fee', admissionFee);
     alert('Settings saved locally.');
   };
 
@@ -77,8 +80,24 @@ export default function Settings() {
             <input type="text" value={zkPort} onChange={e => setZkPort(e.target.value)} className="input-field" />
           </div>
         </div>
+      </div>
+
+      <div className="glass rounded-xl p-6 border border-[#2a2e37]">
+        <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+          <svg className="w-5 h-5 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          Financial Settings
+        </h2>
         
-        <button onClick={saveSettings} className="btn-primary mt-6">Save Device Settings</button>
+        <div className="grid grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1.5">Admission Fee (Rs)</label>
+            <input type="number" value={admissionFee} onChange={e => setAdmissionFee(e.target.value)} className="input-field" />
+          </div>
+        </div>
+        
+        <button onClick={saveSettings} className="btn-primary mt-6">Save Settings</button>
       </div>
 
       <div className="glass rounded-xl p-6 border border-[#2a2e37]">

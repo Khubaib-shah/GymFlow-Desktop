@@ -72,6 +72,22 @@ function registerAuthHandlers(ipcMain2, prisma2) {
 var import_path = __toESM(require("path"));
 function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
   ipcMain2.handle("members:getAll", async () => {
+    const now = /* @__PURE__ */ new Date();
+    await prisma2.member.updateMany({
+      where: {
+        status: "ACTIVE",
+        membershipEnd: { lt: now }
+      },
+      data: { status: "EXPIRED" }
+    });
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1e3);
+    await prisma2.member.updateMany({
+      where: {
+        status: "EXPIRED",
+        membershipEnd: { lt: sixtyDaysAgo }
+      },
+      data: { status: "SUSPENDED" }
+    });
     return await prisma2.member.findMany({
       include: {
         trainer: true,
@@ -313,6 +329,55 @@ function registerAttendanceHandlers(ipcMain2, prisma2) {
   });
 }
 
+// electron/handlers/trainerAttendance.ts
+function registerTrainerAttendanceHandlers(ipcMain2, prisma2) {
+  ipcMain2.handle("trainerAttendance:getAll", async () => {
+    return await prisma2.trainerAttendance.findMany({
+      orderBy: { checkInTime: "desc" },
+      include: { trainer: true }
+    });
+  });
+  ipcMain2.handle("trainerAttendance:getActiveSession", async (_, trainerId) => {
+    const twelveHoursAgo = /* @__PURE__ */ new Date();
+    twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
+    const stale = await prisma2.trainerAttendance.findMany({
+      where: { trainerId, checkOutTime: null, checkInTime: { lt: twelveHoursAgo } }
+    });
+    for (const s of stale) {
+      const autoOut = new Date(s.checkInTime);
+      autoOut.setHours(autoOut.getHours() + 12);
+      await prisma2.trainerAttendance.update({
+        where: { id: s.id },
+        data: { checkOutTime: autoOut }
+      });
+    }
+    return await prisma2.trainerAttendance.findFirst({
+      where: { trainerId, checkOutTime: null, checkInTime: { gte: twelveHoursAgo } },
+      orderBy: { checkInTime: "desc" }
+    });
+  });
+  ipcMain2.handle("trainerAttendance:manualEntry", async (_, trainerId) => {
+    const twelveHoursAgo = /* @__PURE__ */ new Date();
+    twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
+    const trainer = await prisma2.trainer.findUnique({ where: { id: trainerId } });
+    if (!trainer) throw new Error("Trainer not found");
+    const activeSession = await prisma2.trainerAttendance.findFirst({
+      where: { trainerId, checkOutTime: null, checkInTime: { gte: twelveHoursAgo } },
+      orderBy: { checkInTime: "desc" }
+    });
+    if (activeSession) {
+      return await prisma2.trainerAttendance.update({
+        where: { id: activeSession.id },
+        data: { checkOutTime: /* @__PURE__ */ new Date() }
+      });
+    } else {
+      return await prisma2.trainerAttendance.create({
+        data: { trainerId, checkInTime: /* @__PURE__ */ new Date(), method: "MANUAL" }
+      });
+    }
+  });
+}
+
 // electron/handlers/payments.ts
 function registerPaymentsHandlers(ipcMain2, prisma2) {
   ipcMain2.handle("payments:getAll", async () => {
@@ -490,6 +555,7 @@ import_electron2.app.whenReady().then(async () => {
   registerTrainersHandlers(import_electron2.ipcMain, prisma);
   registerPlansHandlers(import_electron2.ipcMain, prisma);
   registerAttendanceHandlers(import_electron2.ipcMain, prisma);
+  registerTrainerAttendanceHandlers(import_electron2.ipcMain, prisma);
   registerPaymentsHandlers(import_electron2.ipcMain, prisma);
   registerSystemHandlers(import_electron2.ipcMain, dbPath, prisma);
   createWindow();

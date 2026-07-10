@@ -7,6 +7,7 @@ import { registerMembersHandlers } from './handlers/members';
 import { registerTrainersHandlers } from './handlers/trainers';
 import { registerPlansHandlers } from './handlers/plans';
 import { registerAttendanceHandlers } from './handlers/attendance';
+import { registerTrainerAttendanceHandlers } from './handlers/trainerAttendance';
 import { registerPaymentsHandlers } from './handlers/payments';
 import { registerSystemHandlers } from './handlers/system';
 
@@ -84,6 +85,7 @@ app.whenReady().then(async () => {
   registerTrainersHandlers(ipcMain, prisma);
   registerPlansHandlers(ipcMain, prisma);
   registerAttendanceHandlers(ipcMain, prisma);
+  registerTrainerAttendanceHandlers(ipcMain, prisma);
   registerPaymentsHandlers(ipcMain, prisma);
   registerSystemHandlers(ipcMain, dbPath, prisma);
 

@@ -1,7 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 
+const VALID_PASSWORDS = ['12345678', 'gymflow'];
+
 export default function Reports() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const passwordRef = useRef<HTMLInputElement>(null);
+
   const [members, setMembers] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [attendances, setAttendances] = useState<any[]>([]);
@@ -73,12 +80,16 @@ export default function Reports() {
   // 1. Revenue
   const totalRevenue = filteredPayments.reduce((sum, p) => sum + p.amount, 0);
   
-  // Revenue by Method
+  // Revenue by Method — only CASH and ONLINE
+  const METHODS = ['CASH', 'ONLINE'];
   const revByMethodMap = filteredPayments.reduce((acc, p) => {
-    acc[p.method] = (acc[p.method] || 0) + p.amount;
+    const method = METHODS.includes(p.method) ? p.method : 'ONLINE'; // remap legacy entries
+    acc[method] = (acc[method] || 0) + p.amount;
     return acc;
   }, {} as Record<string, number>);
-  const revenueByMethod: { name: string; value: number }[] = Object.entries(revByMethodMap).map(([name, value]) => ({ name, value: value as number }));
+  const revenueByMethod: { name: string; value: number }[] = METHODS
+    .filter(m => revByMethodMap[m])
+    .map(m => ({ name: m, value: revByMethodMap[m] }));
 
   // Revenue Over Time (Last 7 Days)
   const last7Days = Array.from({length: 7}).map((_, i) => {
@@ -110,7 +121,7 @@ export default function Reports() {
     checkins: checkinsByDayMap[date] || 0
   }));
 
-  const COLORS = ['#6366f1', '#a855f7', '#ec4899', '#14b8a6'];
+  const METHOD_COLORS: Record<string, string> = { CASH: '#22c55e', ONLINE: '#6366f1' };
 
   const handlePrint = () => {
     window.print();
@@ -163,6 +174,63 @@ export default function Reports() {
 
   if (loading) {
     return <div className="text-gray-500 py-10 text-center">Loading reports...</div>;
+  }
+
+  const handlePasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (VALID_PASSWORDS.includes(passwordInput.trim())) {
+      setIsAuthenticated(true);
+      setPasswordError('');
+    } else {
+      setPasswordError('Incorrect password. Please try again.');
+      setPasswordInput('');
+      setTimeout(() => passwordRef.current?.focus(), 50);
+    }
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <div className="fixed inset-0 bg-[#0b0d11] flex items-center justify-center z-50">
+        <div className="glass w-full max-w-md rounded-2xl p-8 border border-[#2a2e37] shadow-2xl flex flex-col items-center gap-6 animate-in zoom-in-95 duration-300">
+          {/* Lock Icon */}
+          <div className="w-16 h-16 rounded-2xl bg-primary-600/20 flex items-center justify-center border border-primary-500/30">
+            <svg className="w-8 h-8 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-white">Reports Access</h2>
+            <p className="text-gray-400 mt-1 text-sm">This section is password protected. Enter your password to continue.</p>
+          </div>
+          <form onSubmit={handlePasswordSubmit} className="w-full space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-1.5">Password</label>
+              <input
+                ref={passwordRef}
+                autoFocus
+                type="password"
+                className="input-field w-full"
+                placeholder="Enter password..."
+                value={passwordInput}
+                onChange={e => { setPasswordInput(e.target.value); setPasswordError(''); }}
+              />
+              {passwordError && (
+                <p className="mt-2 text-sm text-red-400 flex items-center gap-1.5">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  {passwordError}
+                </p>
+              )}
+            </div>
+            <button type="submit" className="btn-primary w-full flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+              </svg>
+              Unlock Reports
+            </button>
+          </form>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -279,8 +347,8 @@ export default function Reports() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={revenueByMethod} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                  {revenueByMethod.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  {revenueByMethod.map((entry) => (
+                    <Cell key={`cell-${entry.name}`} fill={METHOD_COLORS[entry.name] || '#6366f1'} />
                   ))}
                 </Pie>
                 <Tooltip contentStyle={{backgroundColor: '#13151a', borderColor: '#2a2e37', borderRadius: '8px', color: 'white'}} itemStyle={{color: '#e5e7eb'}} formatter={(val) => `Rs ${Number(val).toFixed(2)}`} />
@@ -288,9 +356,9 @@ export default function Reports() {
             </ResponsiveContainer>
           )}
           <div className="flex gap-4 mt-2">
-            {revenueByMethod.map((entry, index) => (
+            {revenueByMethod.map((entry) => (
               <div key={entry.name} className="flex items-center gap-1.5 text-xs text-gray-400">
-                <div className="w-3 h-3 rounded-full" style={{backgroundColor: COLORS[index % COLORS.length]}}></div>
+                <div className="w-3 h-3 rounded-full" style={{backgroundColor: METHOD_COLORS[entry.name] || '#6366f1'}}></div>
                 {entry.name}: Rs {entry.value.toFixed(2)}
               </div>
             ))}

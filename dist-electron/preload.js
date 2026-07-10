@@ -40,6 +40,11 @@ import_electron.contextBridge.exposeInMainWorld("api", {
     getByMember: (memberId) => import_electron.ipcRenderer.invoke("payments:getByMember", memberId),
     create: (data) => import_electron.ipcRenderer.invoke("payments:create", data)
   },
+  trainerAttendance: {
+    getAll: () => import_electron.ipcRenderer.invoke("trainerAttendance:getAll"),
+    manualEntry: (trainerId) => import_electron.ipcRenderer.invoke("trainerAttendance:manualEntry", trainerId),
+    getActiveSession: (trainerId) => import_electron.ipcRenderer.invoke("trainerAttendance:getActiveSession", trainerId)
+  },
   system: {
     getDbPath: () => import_electron.ipcRenderer.invoke("system:getDbPath"),
     backupDb: () => import_electron.ipcRenderer.invoke("system:backupDb"),

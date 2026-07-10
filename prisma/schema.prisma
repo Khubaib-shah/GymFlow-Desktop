@@ -58,6 +58,7 @@ model Trainer {
   updatedAt DateTime @updatedAt
   
   members   Member[]
+  trainerAttendances TrainerAttendance[]
 }
 
 model MembershipPlan {
@@ -88,7 +89,17 @@ model Payment {
   planId      String?
   amount      Float
   paymentDate DateTime @default(now())
-  method      String   @default("CASH") // CASH, CARD, TRANSFER
+  method      String   @default("CASH") // CASH, ONLINE
   notes       String?
   createdAt   DateTime @default(now())
+}
+
+model TrainerAttendance {
+  id           String   @id @default(cuid())
+  trainerId    String
+  trainer      Trainer  @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  checkInTime  DateTime
+  checkOutTime DateTime?
+  method       String   @default("MANUAL")
+  createdAt    DateTime @default(now())
 }

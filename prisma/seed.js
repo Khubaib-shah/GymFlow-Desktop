@@ -10,6 +10,7 @@ async function main() {
   console.log('🌱 Seeding GymFlow database with Pakistani demo data...\n');
 
   // Clean up existing data first
+  await prisma.trainerAttendance.deleteMany();
   await prisma.attendance.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.member.deleteMany();
@@ -19,7 +20,7 @@ async function main() {
 
   // ─── 1. OWNER ───────────────────────────────────────────────────────────────
   const hashedPassword = await bcrypt.hash('admin123', 10);
-  const owner = await prisma.owner.upsert({
+  await prisma.owner.upsert({
     where: { username: 'admin@gymflow.com' },
     update: {},
     create: { username: 'admin@gymflow.com', password: hashedPassword },
@@ -61,6 +62,7 @@ async function main() {
   const memberData = [];
   const totalMembers = 60;
   
+  // ACTIVE = 45, LEAD = 4, EXPIRED = 4, INACTIVE = 3, SUSPENDED = 4
   const statuses = [
     ...Array(45).fill('ACTIVE'),
     ...Array(4).fill('LEAD'),
@@ -87,14 +89,24 @@ async function main() {
       trainerId = i % 3 === 0 ? trainers[i % trainers.length].id : null;
       
       if (status === 'ACTIVE') {
+        // Some expiring soon (within 7 days) for WhatsApp demo
+        const expiringVariant = i < 5; // first 5 active members expire soon
         membershipStart = daysAgo(Math.floor(Math.random() * 300) + 1);
-        membershipEnd = daysFromNow(Math.floor(Math.random() * plan.durationDays) + 1);
+        membershipEnd = expiringVariant
+          ? daysFromNow(Math.floor(Math.random() * 7))  // 0–6 days left
+          : daysFromNow(Math.floor(Math.random() * (plan.durationDays - 7)) + 8); // 8+ days
       } else if (status === 'EXPIRED') {
-        membershipStart = daysAgo(Math.floor(Math.random() * 300) + plan.durationDays + 10);
-        membershipEnd = daysAgo(Math.floor(Math.random() * 60) + 1);
-      } else if (status === 'INACTIVE' || status === 'SUSPENDED') {
+        // Expired 1–14 days ago (within 15 day threshold for urgent message)
+        membershipStart = daysAgo(plan.durationDays + Math.floor(Math.random() * 10) + 1);
+        membershipEnd = daysAgo(Math.floor(Math.random() * 14) + 1);
+      } else if (status === 'SUSPENDED') {
+        // Suspended = expired 61–120 days ago (auto-suspension rule: >60 days expired)
+        const expiredDaysAgo = 61 + Math.floor(Math.random() * 60);
+        membershipStart = daysAgo(expiredDaysAgo + plan.durationDays);
+        membershipEnd = daysAgo(expiredDaysAgo);
+      } else if (status === 'INACTIVE') {
         membershipStart = daysAgo(Math.floor(Math.random() * 200) + 50);
-        membershipEnd = Math.random() > 0.5 ? daysAgo(10) : daysFromNow(30); 
+        membershipEnd = daysFromNow(30);
       }
     }
     
@@ -106,7 +118,7 @@ async function main() {
       cnic: status !== 'LEAD' ? `35202-${Math.floor(1000000 + Math.random() * 8999999)}-${i % 10}` : null,
       dob: daysAgo(Math.floor(Math.random() * 10000) + 6000),
       gender,
-      address: `Random Street ${i}, ${city}`,
+      address: `Street ${i + 1}, ${city}`,
       planId,
       trainerId,
       membershipStart,
@@ -122,27 +134,47 @@ async function main() {
   console.log(`✅ ${members.length} members created`);
 
   // ─── 5. PAYMENTS ────────────────────────────────────────────────────────────
+  // Only CASH and ONLINE as per current system
+  const paymentMethods = ['CASH', 'ONLINE'];
+  const admissionFee = 4000; // Default from settings
   const paymentRecords = [];
+
   for (const member of members) {
     if (member.planId) {
       const plan = plans.find(p => p.id === member.planId);
+      const isSuspended = member.status === 'SUSPENDED';
+
+      // Initial payment: plan fee + admission fee
       paymentRecords.push({
         memberId: member.id,
         planId: member.planId,
-        amount: plan.price,
-        method: ['CASH', 'CARD', 'TRANSFER'][Math.floor(Math.random() * 3)],
+        amount: plan.price + admissionFee,
+        method: paymentMethods[Math.floor(Math.random() * 2)],
         paymentDate: member.membershipStart || daysAgo(10),
-        notes: `Payment for ${plan.name}`
+        notes: `Admission Fee (Rs ${admissionFee}) + Plan Fee (Rs ${plan.price})`
       });
       
-      if (Math.random() > 0.7) {
+      // Some members have a renewal payment
+      if (!isSuspended && Math.random() > 0.6) {
         paymentRecords.push({
           memberId: member.id,
           planId: member.planId,
           amount: plan.price,
           method: 'CASH',
           paymentDate: daysAgo(Math.floor(Math.random() * 300) + plan.durationDays),
-          notes: `Previous cycle payment`
+          notes: 'Subscription Renewal'
+        });
+      }
+
+      // Suspended members have a re-admission record
+      if (isSuspended && Math.random() > 0.5) {
+        paymentRecords.push({
+          memberId: member.id,
+          planId: member.planId,
+          amount: plan.price + admissionFee,
+          method: 'CASH',
+          paymentDate: daysAgo(Math.floor(Math.random() * 200) + 70),
+          notes: `Subscription Renewal + Re-Admission Fee (Rs ${admissionFee})`
         });
       }
     }
@@ -153,11 +185,11 @@ async function main() {
   }
   console.log(`✅ ${paymentRecords.length} payment records created`);
 
-  // ─── 6. ATTENDANCE (last 30 days, realistic pattern) ────────────────────────
+  // ─── 6. MEMBER ATTENDANCE (last 30 days) ────────────────────────────────────
   let attendanceCount = 0;
   
   for (const member of members) {
-    if (member.status === 'LEAD') continue;
+    if (member.status === 'LEAD' || member.status === 'SUSPENDED') continue;
     
     const daysToSimulate = member.status === 'ACTIVE' ? 30 : 5;
     const probability = member.status === 'ACTIVE' ? 0.7 : 0.2;
@@ -169,7 +201,7 @@ async function main() {
       if (Math.random() > probability) continue;
       if (dayOfWeek === 0 && Math.random() < 0.7) continue;
 
-      const checkInHour = 6 + Math.floor(Math.random() * 14); // Between 6am-8pm
+      const checkInHour = 6 + Math.floor(Math.random() * 14);
       const checkIn = new Date(date);
       checkIn.setHours(checkInHour, Math.floor(Math.random() * 60), 0, 0);
 
@@ -187,7 +219,43 @@ async function main() {
       attendanceCount++;
     }
   }
-  console.log(`✅ ${attendanceCount} attendance records created`);
+  console.log(`✅ ${attendanceCount} member attendance records created`);
+
+  // ─── 7. TRAINER ATTENDANCE (last 30 days) ───────────────────────────────────
+  let trainerAttCount = 0;
+
+  for (const trainer of trainers) {
+    for (let dayOffset = 29; dayOffset >= 0; dayOffset--) {
+      const date = daysAgo(dayOffset);
+      const dayOfWeek = date.getDay();
+
+      // Trainers work 6 days a week (Sunday off 70% of the time)
+      if (dayOfWeek === 5 && Math.random() < 0.8) continue; // Friday mostly off
+      if (dayOfWeek === 0 && Math.random() < 0.5) continue; // Sunday sometimes off
+      if (Math.random() > 0.85) continue; // occasional absence
+
+      // Trainers arrive early: 7am–9am
+      const checkInHour = 7 + Math.floor(Math.random() * 2);
+      const checkIn = new Date(date);
+      checkIn.setHours(checkInHour, Math.floor(Math.random() * 60), 0, 0);
+
+      // Trainers stay 6–10 hours
+      const workHours = 6 + Math.floor(Math.random() * 4);
+      const checkOut = new Date(checkIn);
+      checkOut.setHours(checkIn.getHours() + workHours, Math.floor(Math.random() * 60), 0, 0);
+
+      await prisma.trainerAttendance.create({
+        data: {
+          trainerId: trainer.id,
+          checkInTime: checkIn,
+          checkOutTime: dayOffset > 0 ? checkOut : null, // today's session might still be open
+          method: 'MANUAL',
+        }
+      });
+      trainerAttCount++;
+    }
+  }
+  console.log(`✅ ${trainerAttCount} trainer attendance records created`);
 
   console.log('\n🎉 Seeding complete! Login credentials:');
   console.log('   Username: admin@gymflow.com');
