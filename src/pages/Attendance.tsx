@@ -57,6 +57,18 @@ function MemberAttendanceTab() {
   useEffect(() => {
     fetchLogs();
     (window as any).api.members.getAll().then(setMembers);
+
+    const api = (window as any).api;
+    let cleanupListeners: (() => void) | undefined;
+    if (api?.device?.onAttendanceEvent) {
+      cleanupListeners = api.device.onAttendanceEvent(() => {
+        fetchLogs();
+      });
+    }
+
+    return () => {
+      if (cleanupListeners) cleanupListeners();
+    };
   }, []);
 
   useEffect(() => {
@@ -66,25 +78,6 @@ function MemberAttendanceTab() {
       setActiveSession(null);
     }
   }, [selectedMemberId]);
-
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const ip = localStorage.getItem('zkteco_ip') || '192.168.1.201';
-      const port = parseInt(localStorage.getItem('zkteco_port') || '4370');
-      const result = await (window as any).api.attendance.syncDevice(ip, port);
-      if (result.success) {
-        alert(`Successfully synced ${result.count} new attendance records!`);
-        fetchLogs();
-      } else {
-        alert(`Sync failed: ${result.error}`);
-      }
-    } catch (err: any) {
-      alert(`Sync Error: ${err.message}`);
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -151,19 +144,6 @@ function MemberAttendanceTab() {
         </div>
 
         <button onClick={() => setIsModalOpen(true)} className="btn-secondary flex items-center gap-2">Manual Entry</button>
-        <button onClick={handleSync} disabled={syncing} className={`btn-primary flex items-center gap-2 ${syncing ? 'opacity-70 cursor-wait' : ''}`}>
-          {syncing ? (
-            <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-          ) : (
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          )}
-          {syncing ? 'Syncing...' : 'Sync Device'}
-        </button>
       </div>
 
       <div className="glass rounded-xl overflow-hidden border border-[#2a2e37]">

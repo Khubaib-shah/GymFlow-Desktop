@@ -22,20 +22,20 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
     });
   });
 
-  ipcMain.handle('trainers:create', async (_, data: any) => {
+  ipcMain.handle('trainers:create', async (_: any, data: any) => {
     return await prisma.trainer.create({
       data
     });
   });
 
-  ipcMain.handle('trainers:update', async (_, id: string, data: any) => {
+  ipcMain.handle('trainers:update', async (_: any, id: string, data: any) => {
     return await prisma.trainer.update({
       where: { id },
       data
     });
   });
 
-  ipcMain.handle('trainers:delete', async (_, id: string) => {
+  ipcMain.handle('trainers:delete', async (_: any, id: string) => {
     return await prisma.trainer.delete({
       where: { id }
     });

@@ -55,20 +55,20 @@ async function main() {
   const daysAgo = (n) => new Date(today.getTime() - n * 24 * 60 * 60 * 1000);
   const daysFromNow = (n) => new Date(today.getTime() + n * 24 * 60 * 60 * 1000);
 
-  const firstNames = ['Ali', 'Hamza', 'Usman', 'Bilal', 'Umar', 'Ahmed', 'Ayesha', 'Fatima', 'Zainab', 'Sara', 'Sana', 'Hina', 'Kamran', 'Tariq', 'Junaid', 'Madiha', 'Nadia', 'Asad', 'Imran', 'Hassan', 'Zoya', 'Mariam', 'Saad', 'Fahad', 'Rabia'];
-  const lastNames = ['Khan', 'Malik', 'Chaudhry', 'Ali', 'Farooq', 'Qureshi', 'Sheikh', 'Baig', 'Iqbal', 'Hussain', 'Mirza', 'Javed', 'Nawaz', 'Mahmood', 'Zafar', 'Shah', 'Raza', 'Butt', 'Siddiqui', 'Rehman'];
-  const cities = ['Lahore', 'Karachi', 'Islamabad', 'Peshawar', 'Rawalpindi', 'Multan', 'Faisalabad'];
+  const firstNames = ['Ali', 'Hamza', 'Usman', 'Bilal', 'Umar', 'Ahmed', 'Ayesha', 'Fatima', 'Zainab', 'Sara', 'Sana', 'Hina', 'Kamran', 'Tariq', 'Junaid', 'Madiha', 'Nadia', 'Asad', 'Imran', 'Hassan', 'Zoya', 'Mariam', 'Saad', 'Fahad', 'Rabia', 'Muneeb', 'Waqar', 'Nouman', 'Rimsha', 'Arslan'];
+  const lastNames = ['Khan', 'Malik', 'Chaudhry', 'Ali', 'Farooq', 'Qureshi', 'Sheikh', 'Baig', 'Iqbal', 'Hussain', 'Mirza', 'Javed', 'Nawaz', 'Mahmood', 'Zafar', 'Shah', 'Raza', 'Butt', 'Siddiqui', 'Rehman', 'Akram', 'Azam', 'Tabassum', 'Nasir'];
+  const cities = ['Lahore', 'Karachi', 'Islamabad', 'Peshawar', 'Rawalpindi', 'Multan', 'Faisalabad', 'Sialkot', 'Gujranwala'];
 
   const memberData = [];
-  const totalMembers = 60;
+  const totalMembers = 80;
   
   // ACTIVE = 45, LEAD = 4, EXPIRED = 4, INACTIVE = 3, SUSPENDED = 4
   const statuses = [
-    ...Array(45).fill('ACTIVE'),
-    ...Array(4).fill('LEAD'),
-    ...Array(4).fill('EXPIRED'),
-    ...Array(3).fill('INACTIVE'),
-    ...Array(4).fill('SUSPENDED')
+    ...Array(58).fill('ACTIVE'),
+    ...Array(6).fill('LEAD'),
+    ...Array(6).fill('EXPIRED'),
+    ...Array(5).fill('INACTIVE'),
+    ...Array(5).fill('SUSPENDED')
   ];
 
   for (let i = 0; i < totalMembers; i++) {

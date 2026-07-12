@@ -1,4 +1,5 @@
-import { syncZKTecoLogs } from '../services/zkteco';
+
+import { validateCheckIn } from '../zkTeco/membership/validateCheckIn';
 
 export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
   ipcMain.handle('attendance:getRecent', async (_: any, limit: number = 50) => {
@@ -20,15 +21,6 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
     });
   });
 
-  ipcMain.handle('attendance:syncDevice', async (_: any, ip: string, port: number) => {
-    try {
-      const result = await syncZKTecoLogs(ip, port, prisma);
-      return { success: true, count: result };
-    } catch (error: any) {
-      console.error('ZKTeco sync error:', error);
-      return { success: false, error: error.message };
-    }
-  });
 
   ipcMain.handle('attendance:getActiveSession', async (_: any, memberId: string) => {
     const sixHoursAgo = new Date();
@@ -55,18 +47,17 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
   });
 
   ipcMain.handle('attendance:manualEntry', async (_: any, memberId: string) => {
+    const member = await prisma.member.findUnique({ where: { id: memberId } });
+    if (!member) throw new Error("Member not found");
+
+    const validation = validateCheckIn(member);
+    if (!validation.allowed) {
+      throw new Error(validation.reason || "Check-in not allowed");
+    }
+
     const sixHoursAgo = new Date();
     sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
     
-    const member = await prisma.member.findUnique({ where: { id: memberId } });
-    if (!member) throw new Error("Member not found");
-    if (member.status !== "ACTIVE") {
-      throw new Error(`This member cannot check in because their status is ${member.status.toLowerCase()}.`);
-    }
-    if (!member.planId) {
-      throw new Error("This member cannot check in because they don't have an active plan.");
-    }
-
     // Check if there's an active session
     const activeSession = await prisma.attendance.findFirst({
       where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },

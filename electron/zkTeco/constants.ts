@@ -1,0 +1,31 @@
+export const DEVICE_TYPE = "zkteco-k70";
+export const DEFAULT_DEVICE_SETTINGS = {
+  enabled: false,
+  deviceType: DEVICE_TYPE,
+  ip: "",
+  port: 4370,
+  timeout: 10000,
+  pollInterval: 5000,
+};
+
+export const COMMANDS = {
+  CMD_ENABLEDEVICE: 1002,
+  CMD_DISABLEDEVICE: 1003,
+  CMD_RESTART: 1004,
+
+  CMD_USER_WRQ: 8,
+  CMD_DELETE_USER: 18,
+
+  CMD_STARTENROLL: 61,
+  CMD_CANCELCAPTURE: 62,
+
+  CMD_DATA_WRRQ: 1503,
+  CMD_CAPTUREFINGER: 1009,
+
+  CMD_REFRESHDATA: 1013,
+  CMD_CLEAR_ATTLOG: 15,
+};
+
+export const DEFAULT_RECONNECT_INTERVAL_MS = 10_000;
+export const DEFAULT_POLL_INTERVAL_MS = 5000;
+export const DEFAULT_TIMEOUT_MS = 10000;

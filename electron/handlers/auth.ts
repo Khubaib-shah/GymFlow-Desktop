@@ -6,7 +6,7 @@ export function registerAuthHandlers(ipcMain: any, prisma: any) {
     return count > 0;
   });
 
-  ipcMain.handle('auth:createInitialOwner', async (_, data: any) => {
+  ipcMain.handle('auth:createInitialOwner', async (_: any, data: any) => {
     const count = await prisma.owner.count();
     if (count > 0) throw new Error('Owner already exists');
 
@@ -19,7 +19,7 @@ export function registerAuthHandlers(ipcMain: any, prisma: any) {
     });
   });
 
-  ipcMain.handle('auth:login', async (_, credentials: any) => {
+  ipcMain.handle('auth:login', async (_: any, credentials: any) => {
     const owner = await prisma.owner.findUnique({
       where: { username: credentials.username }
     });

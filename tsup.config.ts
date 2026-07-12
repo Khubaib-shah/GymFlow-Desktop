@@ -6,5 +6,5 @@ export default defineConfig({
   format: ['cjs'],
   target: 'node18',
   clean: true,
-  external: ['electron', 'sqlite3', '@prisma/client', 'bcryptjs', 'twilio', 'node-zklib'],
+  external: ['electron', 'sqlite3', '@prisma/client', 'bcryptjs', 'twilio', 'node-zklib', 'digest-fetch'],
 });
