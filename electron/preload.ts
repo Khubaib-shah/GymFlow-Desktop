@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   attendance: {
     getRecent: (limit?: number) => ipcRenderer.invoke('attendance:getRecent', limit),
     getAll: () => ipcRenderer.invoke('attendance:getAll'),
-    syncDevice: (ip: string, port: number) => ipcRenderer.invoke('attendance:syncDevice', ip, port),
+
     manualEntry: (memberId: string) => ipcRenderer.invoke('attendance:manualEntry', memberId),
     getActiveSession: (memberId: string) => ipcRenderer.invoke('attendance:getActiveSession', memberId),
   },
@@ -48,5 +48,53 @@ contextBridge.exposeInMainWorld('api', {
     backupDb: () => ipcRenderer.invoke('system:backupDb'),
     restoreDb: () => ipcRenderer.invoke('system:restoreDb'),
     resetDb: () => ipcRenderer.invoke('system:resetDb'),
-  }
+  },
+  device: {
+    getSettings: () => ipcRenderer.invoke('device:get-settings'),
+    saveSettings: (settings: any) => ipcRenderer.invoke('device:save-settings', settings),
+    getStatus: () => ipcRenderer.invoke('device:get-status'),
+    testConnection: () => ipcRenderer.invoke('device:test-connection'),
+    getUsers: () => ipcRenderer.invoke('device:get-users'),
+    getAttendance: () => ipcRenderer.invoke('device:get-attendance'),
+    addUser: (payload: any) => ipcRenderer.invoke('device:add-user', payload),
+    updateUser: (payload: any) => ipcRenderer.invoke('device:update-user', payload),
+    deleteUser: (userId: number) => ipcRenderer.invoke('device:delete-user', userId),
+    clearAttendance: () => ipcRenderer.invoke('device:clear-attendance'),
+    restart: () => ipcRenderer.invoke('device:restart'),
+    connect: () => ipcRenderer.invoke('device:connect'),
+    disconnect: () => ipcRenderer.invoke('device:disconnect'),
+    reconnect: () => ipcRenderer.invoke('device:reconnect'),
+    listen: () => ipcRenderer.invoke('device:listen'),
+    stopListen: () => ipcRenderer.invoke('device:stopListen'),
+    configure: (config: any) => ipcRenderer.invoke('device:configure', config),
+    getConfig: () => ipcRenderer.invoke('device:get-config'),
+
+    /**
+     * Subscribe to attendance events from the device.
+     * Returns a cleanup function that MUST be called on component unmount
+     * to prevent listener leaks.
+     */
+    onAttendanceEvent: (callback: (type: string, data: any) => void) => {
+      const checkinListener = (_: any, data: any) => callback('checkin', data);
+      const checkoutListener = (_: any, data: any) => callback('checkout', data);
+      const expiredListener = (_: any, data: any) => callback('expired', data);
+      const inactiveListener = (_: any, data: any) => callback('inactive', data);
+      const unknownListener = (_: any, data: any) => callback('unknown', data);
+
+      ipcRenderer.on('attendance:checkin', checkinListener);
+      ipcRenderer.on('attendance:checkout', checkoutListener);
+      ipcRenderer.on('attendance:expired', expiredListener);
+      ipcRenderer.on('attendance:inactive', inactiveListener);
+      ipcRenderer.on('attendance:unknown', unknownListener);
+
+      // Return cleanup function
+      return () => {
+        ipcRenderer.removeListener('attendance:checkin', checkinListener);
+        ipcRenderer.removeListener('attendance:checkout', checkoutListener);
+        ipcRenderer.removeListener('attendance:expired', expiredListener);
+        ipcRenderer.removeListener('attendance:inactive', inactiveListener);
+        ipcRenderer.removeListener('attendance:unknown', unknownListener);
+      };
+    }
+  },
 });

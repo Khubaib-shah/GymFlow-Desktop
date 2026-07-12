@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 // Utility functions for masking and formatting
 const formatCNIC = (value: string) => {
@@ -99,6 +99,36 @@ export default function Members() {
   const [paymentMethod, setPaymentMethod] = useState('CASH');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  // Enrollment modal state
+  const [enrollModalOpen, setEnrollModalOpen] = useState(false);
+  const [enrollMemberId, setEnrollMemberId] = useState<string | null>(null);
+  const [enrollEmployeeNo, setEnrollEmployeeNo] = useState<number | null>(null);
+  const [enrollMessage, setEnrollMessage] = useState<string>('Please create the user on the device and place the finger when ready.');
+  const [enrollCountdown, setEnrollCountdown] = useState<number>(120);
+  const enrollTimerRef = useRef<number | null>(null);
+  const enrollCountdownRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (enrollTimerRef.current) window.clearInterval(enrollTimerRef.current);
+      if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current);
+    };
+  }, []);
+
+  const closeEnrollModal = () => {
+    if (enrollTimerRef.current) {
+      window.clearInterval(enrollTimerRef.current);
+      enrollTimerRef.current = null;
+    }
+    if (enrollCountdownRef.current) {
+      window.clearInterval(enrollCountdownRef.current);
+      enrollCountdownRef.current = null;
+    }
+    setEnrollModalOpen(false);
+    setEnrollMemberId(null);
+    setEnrollEmployeeNo(null);
+    setEnrollCountdown(120);
+  };
 
   const fetchMembers = async () => {
     setLoading(true);
@@ -181,7 +211,7 @@ export default function Members() {
     else dataToSave.dob = null;
 
     if (editingId) {
-      const { id, createdAt, updatedAt, plan, trainer, attendances, ...updateData } = dataToSave;
+      const { id, createdAt, updatedAt, plan, trainer, attendances, employeeNo, deviceSynced, ...updateData } = dataToSave;
       await (window as any).api.members.update(editingId, updateData);
     } else {
       const newMember = await (window as any).api.members.create(dataToSave);
@@ -200,6 +230,64 @@ export default function Members() {
             ? `Admission Fee (Rs ${admissionFee}) + Plan Fee (Rs ${plan?.price || 0})`
             : 'Initial Subscription'
         });
+      }
+
+      // Device sync feedback
+      if (newMember && newMember.deviceSynced === false && newMember.deviceError) {
+        // If error mentions enrollment/ enroll operator, open enrollment modal and poll member record
+        const msg = String(newMember.deviceError || '').toLowerCase();
+        // Open operator enrollment modal for any device errors that indicate remote/manual enrollment
+        if (msg.includes('enroll') || msg.includes('create user') || msg.includes('manual') || msg.includes('remote') || msg.includes('not supported')) {
+          setEnrollMemberId(newMember.id);
+          setEnrollEmployeeNo(newMember.employeeNo ?? null);
+          const uiMessage = newMember.deviceError || newMember.error || 'Please enroll on device';
+          setEnrollMessage(uiMessage);
+          setEnrollCountdown(120);
+          setEnrollModalOpen(true);
+          console.info('[Members UI] Opening enrollment modal for member', newMember.id, 'employeeNo', newMember.employeeNo, 'msg:', msg, 'uiMessage:', uiMessage);
+          try { window.alert(`Please enroll fingerprint on the device for user ID ${newMember.employeeNo}.
+\n${uiMessage}`); } catch {}
+
+          // start polling member record for deviceSynced
+          if (enrollTimerRef.current) window.clearInterval(enrollTimerRef.current);
+          enrollTimerRef.current = window.setInterval(async () => {
+            try {
+              const refreshed = await (window as any).api.members.getById(newMember.id);
+              if (refreshed?.deviceSynced) {
+                // success
+                window.clearInterval(enrollTimerRef.current!);
+                enrollTimerRef.current = null;
+                if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current);
+                enrollCountdownRef.current = null;
+                setEnrollModalOpen(false);
+                fetchMembers();
+                return;
+              }
+            } catch {
+              // ignore
+            }
+          }, 2000) as unknown as number;
+
+          // countdown timer
+          if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current);
+          enrollCountdownRef.current = window.setInterval(() => {
+            setEnrollCountdown(c => {
+              if (c <= 1) {
+                // timeout
+                if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current!);
+                enrollCountdownRef.current = null;
+                if (enrollTimerRef.current) window.clearInterval(enrollTimerRef.current);
+                enrollTimerRef.current = null;
+                setEnrollModalOpen(false);
+                return 0;
+              }
+              return c - 1;
+            });
+          }, 1000) as unknown as number;
+
+        } else {
+          alert(`⚠️ Member saved locally but could not sync to device.\n\nReason: ${newMember.deviceError}\n\nYou can sync later from Settings.`);
+        }
       }
     }
     setIsModalOpen(false);
@@ -502,10 +590,10 @@ export default function Members() {
                   <label className="block text-sm font-medium text-gray-400 mb-1">Status</label>
                   <select className="input-field" value={formData.status} onChange={e => setFormData({ ...formData, status: e.target.value })}>
                     <option value="LEAD">Lead</option>
-                    {editingId && <option value="ACTIVE">Active</option>}
-                    {editingId && <option value="INACTIVE">Inactive</option>}
-                    {editingId && <option value="SUSPENDED">Suspended</option>}
-                    {editingId && <option value="EXPIRED">Expired</option>}
+                    <option value="ACTIVE">Active</option>
+                    <option value="INACTIVE">Inactive</option>
+                    <option value="SUSPENDED">Suspended</option>
+                    <option value="EXPIRED">Expired</option>
                   </select>
                 </div>
                 <div>
@@ -565,6 +653,33 @@ export default function Members() {
                   </div>
                 );
               })()}
+
+      {/* Enrollment Modal */}
+      {enrollModalOpen && enrollMemberId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="glass w-full max-w-md rounded-2xl p-6 border border-[#2a2e37] shadow-2xl relative">
+            <h2 className="text-lg font-bold text-white mb-2">Enroll Fingerprint on Device</h2>
+            <p className="text-sm text-gray-400 mb-4">{enrollMessage}</p>
+            <div className="bg-[#0f1115] p-3 rounded-lg border border-[#2a2e37] text-sm mb-4">
+              <div className="flex justify-between text-gray-400 mb-1"><span>Member ID</span><span className="text-white">{enrollMemberId}</span></div>
+              <div className="flex justify-between text-gray-400"><span>Device Employee No</span><span className="text-white">{enrollEmployeeNo ?? 'N/A'}</span></div>
+            </div>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-1">
+                <div className="text-xs text-gray-400">Waiting for enrollment...</div>
+                <div className="text-2xl font-bold text-white">{enrollCountdown}s</div>
+              </div>
+              <div className="w-12 h-12 rounded-full bg-primary-600/20 flex items-center justify-center text-primary-400 font-bold">⌛</div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={closeEnrollModal} className="btn-secondary">Cancel</button>
+              <button type="button" onClick={() => { closeEnrollModal(); fetchMembers(); }} className="btn-primary">I'll enroll later</button>
+            </div>
+          </div>
+        </div>
+      )}
 
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-[#2a2e37]">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="btn-secondary">Cancel</button>

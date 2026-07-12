@@ -1,23 +1,90 @@
 import React, { useState, useEffect } from 'react';
 
 export default function Settings() {
-  const [zkIp, setZkIp] = useState('192.168.1.201');
-  const [zkPort, setZkPort] = useState('4370');
   const [admissionFee, setAdmissionFee] = useState('4000');
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetting, setResetting] = useState(false);
-  
+
+  const [enabled, setEnabled] = useState(false);
+  const [deviceType, setDeviceType] = useState('zkteco-k70');
+  const [ip, setIp] = useState('');
+  const [port, setPort] = useState('4370');
+  const [timeout, setTimeout] = useState('10000');
+  const [pollInterval, setPollInterval] = useState('5000');
+  const [status, setStatus] = useState<'idle' | 'checking' | 'connected' | 'offline'>('idle');
+  const [deviceInfo, setDeviceInfo] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
   useEffect(() => {
-    setZkIp(localStorage.getItem('zkteco_ip') || '192.168.1.201');
-    setZkPort(localStorage.getItem('zkteco_port') || '4370');
     setAdmissionFee(localStorage.getItem('admission_fee') || '4000');
+
+    (window as any).api.device.getSettings().then((response: any) => {
+      const config = response?.data ?? response;
+      setEnabled(Boolean(config?.enabled));
+      setDeviceType(config?.deviceType || 'zkteco-k70');
+      setIp(config?.ip || '');
+      setPort(String(config?.port || 4370));
+      setTimeout(String(config?.timeout || 10000));
+      setPollInterval(String(config?.pollInterval || 5000));
+    }).catch(() => undefined);
   }, []);
 
   const saveSettings = () => {
-    localStorage.setItem('zkteco_ip', zkIp);
-    localStorage.setItem('zkteco_port', zkPort);
     localStorage.setItem('admission_fee', admissionFee);
     alert('Settings saved locally.');
+  };
+
+  const saveDeviceSettings = async () => {
+    setSaving(true);
+    try {
+      const response = await (window as any).api.device.saveSettings({
+        enabled,
+        deviceType,
+        ip,
+        port: Number(port),
+        timeout: Number(timeout),
+        pollInterval: Number(pollInterval),
+      });
+      if (response?.success) {
+        alert('ZKTeco settings saved and applied.');
+      } else {
+        alert(response?.error || 'Unable to save ZKTeco settings.');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Unable to save ZKTeco settings.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testDeviceConnection = async () => {
+    setStatus('checking');
+    setError('');
+    setDeviceInfo(null);
+
+    try {
+      const saved = await (window as any).api.device.saveSettings({
+        enabled,
+        deviceType,
+        ip,
+        port: Number(port),
+        timeout: Number(timeout),
+        pollInterval: Number(pollInterval),
+      });
+      if (!saved?.success) throw new Error(saved?.error || 'Invalid settings');
+      const result = await (window as any).api.device.testConnection();
+      if (result?.success) {
+        setStatus('connected');
+        setDeviceInfo(result.data);
+      } else {
+        setStatus('offline');
+        setError(result?.error || 'Device unreachable');
+      }
+    } catch (err: any) {
+      setStatus('offline');
+      setError(err.message || 'Connection failed');
+    }
   };
 
   const handleBackup = async () => {
@@ -62,45 +129,117 @@ export default function Settings() {
         <p className="text-gray-400 mt-1">Configure local hardware and system preferences.</p>
       </div>
 
-      <div className="glass rounded-xl p-6 border border-[#2a2e37]">
+
+      <div className="glass rounded-xl p-6 border border-dark-border">
         <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
           <svg className="w-5 h-5 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
           </svg>
-          ZKTeco Device Configuration
+          ZKTeco K70 Device
+          {status === 'connected' && (
+            <span className="ml-auto text-xs font-medium px-2.5 py-1 rounded-full bg-green-500/10 text-green-400 border border-green-500/20">● Connected</span>
+          )}
+          {status === 'offline' && (
+            <span className="ml-auto text-xs font-medium px-2.5 py-1 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">● Offline</span>
+          )}
+          {status === 'checking' && (
+            <span className="ml-auto text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 flex items-center gap-1.5">
+              <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              Testing...
+            </span>
+          )}
         </h2>
-        
+
         <div className="grid grid-cols-2 gap-6">
+          <div className="col-span-2">
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-gray-400">
+              <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="rounded border-gray-600 bg-transparent" />
+              Enable Device
+            </label>
+          </div>
           <div>
-            <label className="block text-sm font-medium text-gray-400 mb-1.5">Device IP Address</label>
-            <input type="text" value={zkIp} onChange={e => setZkIp(e.target.value)} className="input-field" />
+            <label className="block text-sm font-medium text-gray-400 mb-1.5">Device Type</label>
+            <input type="text" value={deviceType} onChange={e => setDeviceType(e.target.value)} className="input-field" disabled />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1.5">IP Address</label>
+            <input type="text" value={ip} onChange={e => setIp(e.target.value)} className="input-field" placeholder="192.168.1.201" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1.5">Port</label>
-            <input type="text" value={zkPort} onChange={e => setZkPort(e.target.value)} className="input-field" />
+            <input type="text" value={port} onChange={e => setPort(e.target.value)} className="input-field" placeholder="4370" />
           </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1.5">Timeout (ms)</label>
+            <input type="text" value={timeout} onChange={e => setTimeout(e.target.value)} className="input-field" placeholder="10000" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1.5">Polling Interval (ms)</label>
+            <input type="text" value={pollInterval} onChange={e => setPollInterval(e.target.value)} className="input-field" placeholder="5000" />
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+
+        {deviceInfo && (
+          <div className="mt-4 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-sm space-y-1">
+            <p><strong>User Count:</strong> {deviceInfo.userCount ?? 'Unknown'}</p>
+            <p><strong>Attendance Count:</strong> {deviceInfo.attendanceCount ?? 'Unknown'}</p>
+            <p><strong>Status:</strong> {deviceInfo.status || 'Connected'}</p>
+          </div>
+        )}
+
+        <div className="flex gap-3 mt-6">
+          <button onClick={testDeviceConnection} disabled={status === 'checking'} className="btn-secondary flex items-center gap-2">
+            {status === 'checking' ? (
+              <>
+                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Testing...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Test Connection
+              </>
+            )}
+          </button>
+          <button onClick={saveDeviceSettings} disabled={saving} className="btn-primary">
+            {saving ? 'Saving...' : 'Save Device Settings'}
+          </button>
         </div>
       </div>
 
-      <div className="glass rounded-xl p-6 border border-[#2a2e37]">
+      <div className="glass rounded-xl p-6 border border-dark-border">
         <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
           <svg className="w-5 h-5 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           Financial Settings
         </h2>
-        
+
         <div className="grid grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1.5">Admission Fee (Rs)</label>
             <input type="number" value={admissionFee} onChange={e => setAdmissionFee(e.target.value)} className="input-field" />
           </div>
         </div>
-        
+
         <button onClick={saveSettings} className="btn-primary mt-6">Save Settings</button>
       </div>
 
-      <div className="glass rounded-xl p-6 border border-[#2a2e37]">
+      <div className="glass rounded-xl p-6 border border-dark-border">
         <h2 className="text-xl font-bold text-white mb-1 flex items-center gap-2">
           <svg className="w-5 h-5 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
@@ -108,7 +247,7 @@ export default function Settings() {
           Database Management
         </h2>
         <p className="text-sm text-gray-500 mb-5">Backup, restore from a file, or wipe all data.</p>
-        
+
         <div className="flex gap-4">
           <button onClick={handleBackup} className="btn-secondary flex-1 flex items-center justify-center gap-2">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -116,7 +255,7 @@ export default function Settings() {
             </svg>
             Backup Database
           </button>
-          
+
           <button onClick={handleRestore} className="btn-secondary flex-1 flex items-center justify-center gap-2 text-yellow-400 hover:text-yellow-300">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -140,7 +279,7 @@ export default function Settings() {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="glass w-full max-w-md rounded-2xl p-6 border border-red-500/30 shadow-2xl">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0">
+              <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center shrink-0">
                 <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>

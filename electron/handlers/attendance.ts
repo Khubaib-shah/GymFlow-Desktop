@@ -1,4 +1,3 @@
-import { syncZKTecoLogs } from '../services/zkteco';
 
 export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
   ipcMain.handle('attendance:getRecent', async (_: any, limit: number = 50) => {
@@ -20,15 +19,6 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
     });
   });
 
-  ipcMain.handle('attendance:syncDevice', async (_: any, ip: string, port: number) => {
-    try {
-      const result = await syncZKTecoLogs(ip, port, prisma);
-      return { success: true, count: result };
-    } catch (error: any) {
-      console.error('ZKTeco sync error:', error);
-      return { success: false, error: error.message };
-    }
-  });
 
   ipcMain.handle('attendance:getActiveSession', async (_: any, memberId: string) => {
     const sixHoursAgo = new Date();

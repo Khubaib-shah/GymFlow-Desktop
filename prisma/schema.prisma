@@ -18,6 +18,8 @@ model Owner {
 
 model Member {
   id              String         @id @default(cuid())
+  employeeNo      Int?           @unique
+  deviceSynced    Boolean        @default(false)
   firstName       String
   lastName        String?
   email           String?

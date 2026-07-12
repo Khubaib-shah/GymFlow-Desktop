@@ -31,7 +31,6 @@ import_electron.contextBridge.exposeInMainWorld("api", {
   attendance: {
     getRecent: (limit) => import_electron.ipcRenderer.invoke("attendance:getRecent", limit),
     getAll: () => import_electron.ipcRenderer.invoke("attendance:getAll"),
-    syncDevice: (ip, port) => import_electron.ipcRenderer.invoke("attendance:syncDevice", ip, port),
     manualEntry: (memberId) => import_electron.ipcRenderer.invoke("attendance:manualEntry", memberId),
     getActiveSession: (memberId) => import_electron.ipcRenderer.invoke("attendance:getActiveSession", memberId)
   },
@@ -50,5 +49,49 @@ import_electron.contextBridge.exposeInMainWorld("api", {
     backupDb: () => import_electron.ipcRenderer.invoke("system:backupDb"),
     restoreDb: () => import_electron.ipcRenderer.invoke("system:restoreDb"),
     resetDb: () => import_electron.ipcRenderer.invoke("system:resetDb")
+  },
+  device: {
+    getSettings: () => import_electron.ipcRenderer.invoke("device:get-settings"),
+    saveSettings: (settings) => import_electron.ipcRenderer.invoke("device:save-settings", settings),
+    getStatus: () => import_electron.ipcRenderer.invoke("device:get-status"),
+    testConnection: () => import_electron.ipcRenderer.invoke("device:test-connection"),
+    getUsers: () => import_electron.ipcRenderer.invoke("device:get-users"),
+    getAttendance: () => import_electron.ipcRenderer.invoke("device:get-attendance"),
+    addUser: (payload) => import_electron.ipcRenderer.invoke("device:add-user", payload),
+    updateUser: (payload) => import_electron.ipcRenderer.invoke("device:update-user", payload),
+    deleteUser: (userId) => import_electron.ipcRenderer.invoke("device:delete-user", userId),
+    clearAttendance: () => import_electron.ipcRenderer.invoke("device:clear-attendance"),
+    restart: () => import_electron.ipcRenderer.invoke("device:restart"),
+    connect: () => import_electron.ipcRenderer.invoke("device:connect"),
+    disconnect: () => import_electron.ipcRenderer.invoke("device:disconnect"),
+    reconnect: () => import_electron.ipcRenderer.invoke("device:reconnect"),
+    listen: () => import_electron.ipcRenderer.invoke("device:listen"),
+    stopListen: () => import_electron.ipcRenderer.invoke("device:stopListen"),
+    configure: (config) => import_electron.ipcRenderer.invoke("device:configure", config),
+    getConfig: () => import_electron.ipcRenderer.invoke("device:get-config"),
+    /**
+     * Subscribe to attendance events from the device.
+     * Returns a cleanup function that MUST be called on component unmount
+     * to prevent listener leaks.
+     */
+    onAttendanceEvent: (callback) => {
+      const checkinListener = (_, data) => callback("checkin", data);
+      const checkoutListener = (_, data) => callback("checkout", data);
+      const expiredListener = (_, data) => callback("expired", data);
+      const inactiveListener = (_, data) => callback("inactive", data);
+      const unknownListener = (_, data) => callback("unknown", data);
+      import_electron.ipcRenderer.on("attendance:checkin", checkinListener);
+      import_electron.ipcRenderer.on("attendance:checkout", checkoutListener);
+      import_electron.ipcRenderer.on("attendance:expired", expiredListener);
+      import_electron.ipcRenderer.on("attendance:inactive", inactiveListener);
+      import_electron.ipcRenderer.on("attendance:unknown", unknownListener);
+      return () => {
+        import_electron.ipcRenderer.removeListener("attendance:checkin", checkinListener);
+        import_electron.ipcRenderer.removeListener("attendance:checkout", checkoutListener);
+        import_electron.ipcRenderer.removeListener("attendance:expired", expiredListener);
+        import_electron.ipcRenderer.removeListener("attendance:inactive", inactiveListener);
+        import_electron.ipcRenderer.removeListener("attendance:unknown", unknownListener);
+      };
+    }
   }
 });

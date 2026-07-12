@@ -1,7 +1,14 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { PrismaClient } from '@prisma/client';
 import fs from 'fs';
+// Catch uncaught exceptions in the main process to avoid hard crashes from third-party libs
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception in main process:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Promise Rejection in main process:', reason);
+});
 import { registerAuthHandlers } from './handlers/auth';
 import { registerMembersHandlers } from './handlers/members';
 import { registerTrainersHandlers } from './handlers/trainers';
@@ -10,6 +17,7 @@ import { registerAttendanceHandlers } from './handlers/attendance';
 import { registerTrainerAttendanceHandlers } from './handlers/trainerAttendance';
 import { registerPaymentsHandlers } from './handlers/payments';
 import { registerSystemHandlers } from './handlers/system';
+import { registerZkTecoDeviceHandlers, deviceManager } from './zkTeco';
 
 // Initialize Prisma client with local database
 const isDev = !app.isPackaged;
@@ -43,6 +51,11 @@ export const prisma = new PrismaClient({
 });
 
 let mainWindow: BrowserWindow | null = null;
+
+/** Getter so handlers always have the current mainWindow reference */
+function getMainWindow(): BrowserWindow | null {
+  return mainWindow;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -79,7 +92,7 @@ app.whenReady().then(async () => {
     fs.mkdirSync(mediaDir, { recursive: true });
   }
 
-  // Register all IPC handlers
+  // Register all IPC handlers (use getter for mainWindow so it's never stale)
   registerAuthHandlers(ipcMain, prisma);
   registerMembersHandlers(ipcMain, prisma, app.getPath('userData'));
   registerTrainersHandlers(ipcMain, prisma);
@@ -88,8 +101,15 @@ app.whenReady().then(async () => {
   registerTrainerAttendanceHandlers(ipcMain, prisma);
   registerPaymentsHandlers(ipcMain, prisma);
   registerSystemHandlers(ipcMain, dbPath, prisma);
+  registerZkTecoDeviceHandlers(ipcMain, prisma, getMainWindow);
 
+  // Create window AFTER registering handlers
   createWindow();
+
+  const settings = deviceManager.getSettings();
+  if (settings.enabled && settings.ip) {
+    deviceManager.startAutoLifecycle();
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
