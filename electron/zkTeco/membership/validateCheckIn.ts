@@ -3,7 +3,15 @@ export function validateCheckIn(member: any): { allowed: boolean; reason?: strin
     return { allowed: false, reason: "Member not found" };
   }
 
-  if (member.status !== "ACTIVE") {
+  // Allow LEAD status members (prospects) to check in even without a plan
+  const status = (member.status || "").toUpperCase();
+
+  if (status === "LEAD") {
+    // Leads are allowed to check in, they are prospects/trial members
+    return { allowed: true };
+  }
+
+  if (status !== "ACTIVE") {
     return { allowed: false, reason: `Member status is ${member.status}` };
   }
 

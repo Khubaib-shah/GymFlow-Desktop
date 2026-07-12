@@ -99,13 +99,17 @@ export function registerMembersHandlers(
 
   ipcMain.handle("members:create", async (_: any, data: any) => {
     // ─── Step 1: Generate next employeeNo ──────────────────────────────
-    const lastMember = await prisma.member.findFirst({
-      where: { employeeNo: { not: null } },
-      orderBy: { employeeNo: "desc" },
-      select: { employeeNo: true },
-    });
+    const isActive = data.status === "ACTIVE";
+    let nextEmployeeNo: number | null = null;
 
-    const nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+    if (isActive) {
+      const lastMember = await prisma.member.findFirst({
+        where: { employeeNo: { not: null } },
+        orderBy: { employeeNo: "desc" },
+        select: { employeeNo: true },
+      });
+      nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+    }
 
     // ─── Step 2: Save to SQLite with employeeNo ────────────────────────
     let member;
@@ -130,15 +134,23 @@ export function registerMembersHandlers(
     let deviceSynced = false;
     let deviceError: string | undefined;
 
+    if (!isActive) {
+      return {
+        ...member,
+        deviceSynced: false,
+        deviceError: undefined,
+      };
+    }
+
     const memberName = `${data.firstName || ""} ${data.lastName || ""}`.trim();
 
     try {
       // Build a flexible payload covering common ZK library shapes
       const userPayload = {
-        uid: nextEmployeeNo,
-        id: nextEmployeeNo,
-        userId: nextEmployeeNo,
-        employeeNo: nextEmployeeNo,
+        uid: nextEmployeeNo as number,
+        id: nextEmployeeNo as number,
+        userId: nextEmployeeNo as number,
+        employeeNo: nextEmployeeNo as number,
         name: memberName,
         fullName: memberName,
         firstName: data.firstName,
@@ -160,7 +172,7 @@ export function registerMembersHandlers(
             employeeNo: nextEmployeeNo,
           });
           const enrolled = await deviceManager.waitForEnrollment(
-            nextEmployeeNo,
+            nextEmployeeNo as number,
             300000,
             5000,
           );
@@ -174,7 +186,7 @@ export function registerMembersHandlers(
                 where: { id: member.id },
                 data: { deviceSynced: true },
               });
-            } catch {}
+            } catch { }
           } else {
             deviceLogger.warn("Fingerprint enrollment timed out", {
               employeeNo: nextEmployeeNo,
@@ -194,7 +206,7 @@ export function registerMembersHandlers(
         data: { deviceSynced: true },
       });
 
-      deviceLogger.userCreated(nextEmployeeNo, memberName);
+      deviceLogger.userCreated(nextEmployeeNo as number, memberName);
     } catch (error: any) {
       // If the underlying ZK library doesn't support remote enrollment, guide operator to enroll locally.
       const msg = String(error?.message || error);
@@ -206,7 +218,7 @@ export function registerMembersHandlers(
           "Remote enrollment not supported by device/library. Please create user with ID " +
           nextEmployeeNo +
           " on the device and enroll fingerprint; the app will detect it automatically.";
-        deviceLogger.userCreateFailed(nextEmployeeNo, memberName, msg);
+        deviceLogger.userCreateFailed(nextEmployeeNo as number, memberName, msg);
 
         // Start background wait for manual enrollment (operator creates user on device and enrolls fingerprint)
         (async () => {
@@ -216,7 +228,7 @@ export function registerMembersHandlers(
               { employeeNo: nextEmployeeNo },
             );
             const enrolled = await deviceManager.waitForEnrollment(
-              nextEmployeeNo,
+              nextEmployeeNo as number,
               120000,
               2000,
             );
@@ -230,7 +242,7 @@ export function registerMembersHandlers(
                   where: { id: member.id },
                   data: { deviceSynced: true },
                 });
-              } catch {}
+              } catch { }
             } else {
               deviceLogger.warn("Manual fingerprint enrollment timed out", {
                 employeeNo: nextEmployeeNo,
@@ -245,7 +257,7 @@ export function registerMembersHandlers(
         })();
       } else {
         deviceError = msg;
-        deviceLogger.userCreateFailed(nextEmployeeNo, memberName, msg);
+        deviceLogger.userCreateFailed(nextEmployeeNo as number, memberName, msg);
       }
     }
 
@@ -258,10 +270,51 @@ export function registerMembersHandlers(
   });
 
   ipcMain.handle("members:update", async (_: any, id: string, data: any) => {
-    const member = await prisma.member.update({
+    let member = await prisma.member.update({
       where: { id },
       data,
     });
+
+    // If member became ACTIVE and doesn't have an employeeNo, generate one and sync
+    if (member.status === "ACTIVE" && !member.employeeNo) {
+      const lastMember = await prisma.member.findFirst({
+        where: { employeeNo: { not: null } },
+        orderBy: { employeeNo: "desc" },
+        select: { employeeNo: true },
+      });
+      const nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+
+      member = await prisma.member.update({
+        where: { id },
+        data: { employeeNo: nextEmployeeNo },
+      });
+
+      try {
+        const memberName = `${member.firstName || ""} ${member.lastName || ""}`.trim();
+        await deviceManager.addUser({
+          uid: nextEmployeeNo,
+          id: nextEmployeeNo,
+          userId: nextEmployeeNo,
+          employeeNo: nextEmployeeNo,
+          name: memberName,
+          fullName: memberName,
+          firstName: member.firstName,
+          lastName: member.lastName,
+          privilege: 0,
+          password: "",
+          enabled: true,
+          startDate: formatDeviceDate(member.membershipStart),
+          endDate: formatDeviceDate(member.membershipEnd),
+        });
+        await prisma.member.update({
+          where: { id: member.id },
+          data: { deviceSynced: true },
+        });
+        deviceLogger.info("Assigned ID and synced upgraded member to device", { employeeNo: nextEmployeeNo });
+      } catch (error: any) {
+        deviceLogger.error("Failed to create upgraded member on device", { error: error.message });
+      }
+    }
 
     // Sync status change to Hikvision device
     if (member.employeeNo) {
@@ -334,24 +387,54 @@ export function registerMembersHandlers(
   ipcMain.handle("members:getDeviceSyncStatus", async () => {
     try {
       const deviceUsers = await deviceManager.getUsers();
-      const deviceUids = new Set(
-        deviceUsers
-          .map((u) => Number(u.uid ?? u.userId))
-          .filter((n: number) => !Number.isNaN(n)),
-      );
+      const deviceUsersMap = new Map();
+
+      for (const u of deviceUsers) {
+        const uid = Number(u.uid ?? u.userId);
+        if (!Number.isNaN(uid)) {
+          deviceUsersMap.set(uid, u);
+        }
+      }
 
       const members = await prisma.member.findMany({
-        select: { id: true, employeeNo: true, deviceSynced: true },
+        select: { id: true, employeeNo: true, deviceSynced: true, firstName: true, lastName: true },
       });
 
-      return {
-        success: true,
-        data: members.map((m: any) => ({
+      const updatedStatus = [];
+
+      for (const m of members) {
+        const onDevice = m.employeeNo != null ? deviceUsersMap.has(m.employeeNo) : false;
+
+        // Sync name from device to local DB if it differs
+        if (onDevice) {
+          const dUser = deviceUsersMap.get(m.employeeNo);
+          const dName = (dUser.name || "").trim();
+          const localName = `${m.firstName || ""} ${m.lastName || ""}`.trim();
+
+          if (dName && dName !== localName) {
+            // Split dName into first and last
+            const parts = dName.split(" ");
+            const newFirst = parts[0];
+            const newLast = parts.slice(1).join(" ");
+
+            await prisma.member.update({
+              where: { id: m.id },
+              data: { firstName: newFirst, lastName: newLast }
+            });
+          }
+        }
+
+        updatedStatus.push({
           id: m.id,
           employeeNo: m.employeeNo,
           deviceSynced: m.deviceSynced,
-          onDevice: m.employeeNo != null ? deviceUids.has(m.employeeNo) : false,
-        })),
+          onDevice,
+        });
+      }
+
+      return {
+        success: true,
+        data: updatedStatus,
       };
     } catch (error) {
       return { success: false, data: [] };

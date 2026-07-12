@@ -11,7 +11,7 @@ import_electron.contextBridge.exposeInMainWorld("api", {
   members: {
     getAll: () => import_electron.ipcRenderer.invoke("members:getAll"),
     getById: (id) => import_electron.ipcRenderer.invoke("members:getById", id),
-    create: (data) => import_electron.ipcRenderer.invoke("members:cmembers:getAllreate", data),
+    create: (data) => import_electron.ipcRenderer.invoke("members:create", data),
     update: (id, data) => import_electron.ipcRenderer.invoke("members:update", id, data),
     delete: (id) => import_electron.ipcRenderer.invoke("members:delete", id),
     getPhotoPath: (filename) => import_electron.ipcRenderer.invoke("members:getPhotoPath", filename),

@@ -16,6 +16,11 @@ export class DeviceManager extends EventEmitter {
   private pollTimer: NodeJS.Timeout | null = null;
   private lastConnectedAt: string | null = null;
   private lastAttendanceFingerprint = new Set<string>();
+  private isFirstPoll = true;
+  private isReconnecting = false;
+  private consecutiveFailures = 0;
+  /** Tracks the last emitted status message to avoid duplicate status events */
+  private lastStatusEmitHash: string | null = null;
 
   constructor() {
     super();
@@ -39,12 +44,14 @@ export class DeviceManager extends EventEmitter {
     try {
       await this.client.connect(this.settings);
       this.connected = true;
+      this.consecutiveFailures = 0;
       this.lastConnectedAt = new Date().toISOString();
-      this.emit('status', this.buildStatus('connected', 'Connected successfully'));
+      this.emitStatusOnce('connected', 'Connected successfully');
       return this.buildStatus('connected', 'Connected successfully');
     } catch (error) {
       this.connected = false;
-      this.emit('status', this.buildStatus('offline', toErrorMessage(error)));
+      this.consecutiveFailures++;
+      this.emitStatusOnce('offline', toErrorMessage(error));
       throw error;
     }
   }
@@ -56,7 +63,7 @@ export class DeviceManager extends EventEmitter {
     this.reconnectTimer = null;
     await this.client.disconnect();
     this.connected = false;
-    this.emit('status', this.buildStatus('disconnected', 'Device disconnected'));
+    this.emitStatusOnce('disconnected', 'Device disconnected');
   }
 
   async reconnect(): Promise<DeviceStatusPayload> {
@@ -219,35 +226,62 @@ export class DeviceManager extends EventEmitter {
   startAutoLifecycle(): void {
     const settings = this.getSettings();
     if (!settings.enabled || !settings.ip) return;
+    // Reset the status emit hash so lifecycle events are always emitted fresh
+    this.lastStatusEmitHash = null;
+    this.initializeAttendanceFingerprint();
     this.startPolling();
     this.scheduleReconnect();
+  }
+
+  /** On startup, pre-populate the fingerprint set with ALL existing attendance logs
+   *  so they are never re-processed on app restart. This solves the issue of
+   *  re-matching old check-ins/check-outs every time the software starts. */
+  private async initializeAttendanceFingerprint(): Promise<void> {
+    try {
+      // Manually connect first to get logs without triggering auto-connect side effects
+      if (!this.connected) {
+        try {
+          await this.connect();
+        } catch {
+          // Device not reachable at startup - fingerprint will populate on first poll
+          return;
+        }
+      }
+      const logs = await this.client.getAttendance();
+      for (const log of logs) {
+        const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
+        this.lastAttendanceFingerprint.add(key);
+      }
+      this.isFirstPoll = false; // skip first-poll logic entirely
+    } catch {
+      // If device is unreachable at startup, we'll populate on first successful poll
+    }
   }
 
   private startPolling(): void {
     if (this.pollTimer) return;
     const interval = this.settings.pollInterval || DEFAULT_POLL_INTERVAL_MS;
     this.pollTimer = setInterval(async () => {
-      if (!this.connected) {
-        try {
-          await this.connect();
-        } catch {
-          // will retry later
-        }
-        return;
-      }
+      if (!this.connected) return; // scheduleReconnect handles reconnection
       try {
-        const logs = await this.getAttendance();
+        // Directly call client.getAttendance() to avoid triggering auto-connect
+        const logs = await this.client.getAttendance();
         const newLogs = logs.filter((log: any) => {
           const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
           return !this.lastAttendanceFingerprint.has(key);
         });
         this.lastAttendanceFingerprint = new Set([...Array.from(this.lastAttendanceFingerprint).slice(-200), ...newLogs.map((item: any) => `${item.userId ?? item.uid ?? item.deviceUserId ?? 'unknown'}-${item.timestamp ?? item.attTime ?? ''}`)]);
+
         if (newLogs.length > 0) {
-          this.emit('attendance', newLogs);
+          this.emit('attendance', newLogs, false);
         }
       } catch (error) {
-        this.emit('status', this.buildStatus('offline', toErrorMessage(error)));
-        this.connected = false;
+        // Only emit offline if we were previously connected (prevents duplicate status spam)
+        if (this.connected) {
+          this.connected = false;
+          this.consecutiveFailures++;
+          this.emitStatusOnce('offline', toErrorMessage(error));
+        }
       }
     }, interval);
   }
@@ -255,14 +289,31 @@ export class DeviceManager extends EventEmitter {
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setInterval(async () => {
-      if (!this.connected) {
+      if (!this.connected && !this.isReconnecting) {
+        this.isReconnecting = true;
         try {
+          // Exponential backoff: skip reconnect attempts if we've failed too many times recently
+          if (this.consecutiveFailures > 5) {
+            // Wait longer between retries: skip this interval if we've failed >5 times
+            // The next interval will try again
+            return;
+          }
           await this.connect();
         } catch {
-          // retry
+          // retry on next interval
+        } finally {
+          this.isReconnecting = false;
         }
       }
     }, DEFAULT_RECONNECT_INTERVAL_MS);
+  }
+
+  /** Emits a status event only if the status message has changed, to prevent flickering */
+  private emitStatusOnce(status: DeviceStatusPayload['status'], message: string): void {
+    const hash = `${status}:${message}`;
+    if (this.lastStatusEmitHash === hash) return;
+    this.lastStatusEmitHash = hash;
+    this.emit('status', this.buildStatus(status, message));
   }
 
   private buildStatus(status: DeviceStatusPayload['status'], message: string): DeviceStatusPayload {

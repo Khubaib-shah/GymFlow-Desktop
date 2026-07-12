@@ -18,7 +18,7 @@ export function registerDeviceAttendanceBridge(args: {
     getMainWindow()?.webContents.send(channel, data);
   };
 
-  deviceManager.on("attendance", async (newLogs: DeviceAttendancePayload[]) => {
+  deviceManager.on("attendance", async (newLogs: DeviceAttendancePayload[], silent: boolean = false) => {
     try {
       for (const logItem of newLogs) {
         const deviceUserIdRaw =
@@ -27,21 +27,25 @@ export function registerDeviceAttendanceBridge(args: {
           deviceUserIdRaw == null ? null : Number(deviceUserIdRaw);
 
         if (!deviceUserId || Number.isNaN(deviceUserId)) {
-          sendToRenderer("attendance:unknown", {
-            reason: "missing-device-user-id",
-            deviceUserId: deviceUserIdRaw,
-            deviceLog: logItem,
-          });
+          if (!silent) {
+            sendToRenderer("attendance:unknown", {
+              reason: "missing-device-user-id",
+              deviceUserId: deviceUserIdRaw,
+              deviceLog: logItem,
+            });
+          }
           continue;
         }
 
         const member = await getMemberByDeviceUserId(deviceUserId);
 
         if (!member) {
-          sendToRenderer("attendance:unknown", {
-            deviceUserId,
-            deviceLog: logItem,
-          });
+          if (!silent) {
+            sendToRenderer("attendance:unknown", {
+              deviceUserId,
+              deviceLog: logItem,
+            });
+          }
           continue;
         }
 
@@ -49,22 +53,24 @@ export function registerDeviceAttendanceBridge(args: {
         const checkInValidation = validateCheckIn(member);
 
         if (!checkInValidation.allowed) {
-          if (state === "EXPIRED") {
-            sendToRenderer("attendance:expired", {
-              memberId: member.id,
-              deviceUserId,
-              state,
-              reason: checkInValidation.reason,
-              deviceLog: logItem,
-            });
-          } else {
-            sendToRenderer("attendance:inactive", {
-              memberId: member.id,
-              deviceUserId,
-              state,
-              reason: checkInValidation.reason,
-              deviceLog: logItem,
-            });
+          if (!silent) {
+            if (state === "EXPIRED") {
+              sendToRenderer("attendance:expired", {
+                memberId: member.id,
+                deviceUserId,
+                state,
+                reason: checkInValidation.reason,
+                deviceLog: logItem,
+              });
+            } else {
+              sendToRenderer("attendance:inactive", {
+                memberId: member.id,
+                deviceUserId,
+                state,
+                reason: checkInValidation.reason,
+                deviceLog: logItem,
+              });
+            }
           }
           continue;
         }
@@ -76,13 +82,15 @@ export function registerDeviceAttendanceBridge(args: {
           logItem,
         });
 
-        sendToRenderer(result.ipcEvent, {
-          member,
-          deviceUserId,
-          attendance: result.attendance,
-          membershipState: state,
-          deviceLog: logItem,
-        });
+        if (!silent) {
+          sendToRenderer(result.ipcEvent, {
+            member,
+            deviceUserId,
+            attendance: result.attendance,
+            membershipState: state,
+            deviceLog: logItem,
+          });
+        }
 
         deviceLogger.info("Attendance bridged", {
           ipcEvent: result.ipcEvent,
@@ -101,6 +109,6 @@ export function registerDeviceAttendanceBridge(args: {
   deviceManager.on("status", (status) => {
     try {
       sendToRenderer("device:status", status);
-    } catch {}
+    } catch { }
   });
 }

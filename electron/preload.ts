@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld("api", {
     getAll: () => ipcRenderer.invoke("members:getAll"),
     getById: (id: string) => ipcRenderer.invoke("members:getById", id),
     create: (data: any) =>
-      ipcRenderer.invoke("members:cmembers:getAllreate", data),
+      ipcRenderer.invoke("members:create", data),
     update: (id: string, data: any) =>
       ipcRenderer.invoke("members:update", id, data),
     delete: (id: string) => ipcRenderer.invoke("members:delete", id),

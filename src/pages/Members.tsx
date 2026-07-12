@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 // Utility functions for masking and formatting
 const formatCNIC = (value: string) => {
@@ -48,10 +49,10 @@ const buildWhatsAppUrl = (member: any) => {
   const daysLeft = getDaysUntilExpiry(member.membershipEnd);
   const expiryDate = member.membershipEnd
     ? new Date(member.membershipEnd).toLocaleDateString("en-PK", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    })
     : "";
 
   let message = "";
@@ -114,6 +115,7 @@ export default function Members() {
       { onDevice: boolean; employeeNo: number | null; deviceSynced: boolean }
     >
   >({});
+  const [syncLoading, setSyncLoading] = useState(true);
 
   // Renew Modal State
   const [renewModalOpen, setRenewModalOpen] = useState(false);
@@ -132,6 +134,8 @@ export default function Members() {
   const [enrollCountdown, setEnrollCountdown] = useState<number>(120);
   const enrollTimerRef = useRef<number | null>(null);
   const enrollCountdownRef = useRef<number | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     return () => {
@@ -141,7 +145,21 @@ export default function Members() {
     };
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const renewId = params.get("renew");
+    if (renewId && members.length > 0) {
+      const member = members.find((m) => m.id === renewId);
+      if (member) {
+        openRenewModal(member);
+        // Clear the query param
+        navigate("/members", { replace: true });
+      }
+    }
+  }, [location.search, members, navigate]);
+
   const fetchDeviceSyncStatus = async () => {
+    setSyncLoading(true);
     try {
       const res = await (window as any).api.members.getDeviceSyncStatus();
       if (res?.success && Array.isArray(res.data)) {
@@ -164,6 +182,8 @@ export default function Members() {
       }
     } catch {
       // ignore
+    } finally {
+      setSyncLoading(false);
     }
   };
 
@@ -347,7 +367,7 @@ export default function Members() {
           try {
             window.alert(`Please enroll fingerprint on the device for user ID ${newMember.employeeNo}.
 \n${uiMessage}`);
-          } catch {}
+          } catch { }
 
           // start polling member record for deviceSynced
           if (enrollTimerRef.current)
@@ -441,7 +461,7 @@ export default function Members() {
       planId: selectedPlanId,
       membershipStart:
         selectedRenewMember.membershipEnd &&
-        new Date(selectedRenewMember.membershipEnd) > new Date()
+          new Date(selectedRenewMember.membershipEnd) > new Date()
           ? selectedRenewMember.membershipStart
           : new Date().toISOString(),
       membershipEnd: newEndDate.toISOString(),
@@ -497,49 +517,49 @@ export default function Members() {
     color: string;
     activeColor: string;
   }[] = [
-    {
-      key: "ALL",
-      label: "All Members",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-white hover:border-gray-500",
-      activeColor: "bg-white/10 border-white/30 text-white",
-    },
-    {
-      key: "LEAD",
-      label: "Leads",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-blue-400 hover:border-blue-500/40",
-      activeColor: "bg-blue-500/10 border-blue-500/40 text-blue-400",
-    },
-    {
-      key: "ACTIVE",
-      label: "Active",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-green-400 hover:border-green-500/40",
-      activeColor: "bg-green-500/10 border-green-500/40 text-green-400",
-    },
-    {
-      key: "EXPIRED",
-      label: "Expired",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-red-400 hover:border-red-500/40",
-      activeColor: "bg-red-500/10 border-red-500/40 text-red-400",
-    },
-    {
-      key: "INACTIVE",
-      label: "Inactive",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-yellow-400 hover:border-yellow-500/40",
-      activeColor: "bg-yellow-500/10 border-yellow-500/40 text-yellow-400",
-    },
-    {
-      key: "SUSPENDED",
-      label: "Suspended",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-orange-400 hover:border-orange-500/40",
-      activeColor: "bg-orange-500/10 border-orange-500/40 text-orange-400",
-    },
-  ];
+      {
+        key: "ALL",
+        label: "All Members",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-white hover:border-gray-500",
+        activeColor: "bg-white/10 border-white/30 text-white",
+      },
+      {
+        key: "LEAD",
+        label: "Leads",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-blue-400 hover:border-blue-500/40",
+        activeColor: "bg-blue-500/10 border-blue-500/40 text-blue-400",
+      },
+      {
+        key: "ACTIVE",
+        label: "Active",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-green-400 hover:border-green-500/40",
+        activeColor: "bg-green-500/10 border-green-500/40 text-green-400",
+      },
+      {
+        key: "EXPIRED",
+        label: "Expired",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-red-400 hover:border-red-500/40",
+        activeColor: "bg-red-500/10 border-red-500/40 text-red-400",
+      },
+      {
+        key: "INACTIVE",
+        label: "Inactive",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-yellow-400 hover:border-yellow-500/40",
+        activeColor: "bg-yellow-500/10 border-yellow-500/40 text-yellow-400",
+      },
+      {
+        key: "SUSPENDED",
+        label: "Suspended",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-orange-400 hover:border-orange-500/40",
+        activeColor: "bg-orange-500/10 border-orange-500/40 text-orange-400",
+      },
+    ];
 
   return (
     <div className="space-y-6">
@@ -622,15 +642,13 @@ export default function Members() {
           <button
             key={f.key}
             onClick={() => setStatusFilter(f.key)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium transition-all ${
-              statusFilter === f.key ? f.activeColor : f.color
-            }`}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium transition-all ${statusFilter === f.key ? f.activeColor : f.color
+              }`}
           >
             {f.label}
             <span
-              className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
-                statusFilter === f.key ? "bg-white/20" : "bg-[#1a1d24]"
-              }`}
+              className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${statusFilter === f.key ? "bg-white/20" : "bg-[#1a1d24]"
+                }`}
             >
               {statusCounts[f.key as keyof typeof statusCounts]}
             </span>
@@ -714,19 +732,18 @@ export default function Members() {
                       <td className="px-6 py-4">
                         <div className="flex flex-col gap-1">
                           <span
-                            className={`px-2.5 py-1 rounded-full text-xs font-medium w-fit ${
-                              member.status === "ACTIVE"
-                                ? "bg-green-500/10 text-green-400 border border-green-500/20"
-                                : member.status === "LEAD"
-                                  ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                                  : member.status === "EXPIRED"
-                                    ? "bg-red-500/10 text-red-400 border border-red-500/20"
-                                    : member.status === "INACTIVE"
-                                      ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
-                                      : member.status === "SUSPENDED"
-                                        ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
-                                        : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
-                            }`}
+                            className={`px-2.5 py-1 rounded-full text-xs font-medium w-fit ${member.status === "ACTIVE"
+                              ? "bg-green-500/10 text-green-400 border border-green-500/20"
+                              : member.status === "LEAD"
+                                ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                                : member.status === "EXPIRED"
+                                  ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                                  : member.status === "INACTIVE"
+                                    ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
+                                    : member.status === "SUSPENDED"
+                                      ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
+                                      : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
+                              }`}
                           >
                             {member.status}
                           </span>
@@ -756,24 +773,20 @@ export default function Members() {
                             </span>
                           )}
                           {(() => {
-                            const sync = deviceSyncStatus[member.id];
-                            if (!sync) return null;
-                            if (sync.onDevice) {
+                            if (syncLoading) {
                               return (
-                                <span className="text-green-400 font-medium">
-                                  ✓ On Device
-                                </span>
-                              );
-                            } else if (member.employeeNo && !sync.onDevice) {
-                              return (
-                                <span className="text-red-400 font-medium">
-                                  ✗ Missing From Device
-                                </span>
+                                <span className="text-gray-400 text-xs animate-pulse">Checking...</span>
                               );
                             }
-                            return (
-                              <span className="text-gray-500">Unknown</span>
-                            );
+                            const sync = deviceSyncStatus[member.id];
+                            if (!sync) return null;
+
+                            if (!member.employeeNo && !sync.onDevice) {
+                              return (
+                                <span className="text-gray-500">Not on Device</span>
+
+                              );
+                            }
                           })()}
                         </div>
                       </td>
@@ -1240,8 +1253,8 @@ export default function Members() {
                     <span className="text-white font-medium">
                       {selectedRenewMember.membershipEnd
                         ? new Date(
-                            selectedRenewMember.membershipEnd,
-                          ).toLocaleDateString()
+                          selectedRenewMember.membershipEnd,
+                        ).toLocaleDateString()
                         : "None"}
                     </span>
                   </div>

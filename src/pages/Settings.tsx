@@ -39,7 +39,15 @@ export default function Settings() {
       .getStatus()
       .then((res: any) => {
         const s = res?.data ?? res;
-        if (s?.connected) setStatus("connected");
+        if (s?.connected) {
+          setStatus("connected");
+          // Automatically fetch detailed device info (user/attendance count)
+          (window as any).api.device.testConnection().then((testRes: any) => {
+            if (testRes?.success) {
+              setDeviceInfo(testRes.data);
+            }
+          }).catch(() => undefined);
+        }
         else if (s?.status === "connecting") setStatus("checking");
         else setStatus("offline");
         setDeviceStatus(s);
@@ -54,6 +62,12 @@ export default function Settings() {
         if (s?.connected) {
           setStatus("connected");
           setError("");
+          // Automatically fetch detailed device info
+          (window as any).api.device.testConnection().then((testRes: any) => {
+            if (testRes?.success) {
+              setDeviceInfo(testRes.data);
+            }
+          }).catch(() => undefined);
         } else if (s?.status === "connecting") {
           setStatus("checking");
         } else {
@@ -475,13 +489,7 @@ export default function Settings() {
 
         {deviceInfo && !deviceStatus && (
           <div className="mt-4 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-sm space-y-1">
-            <p>
-              <strong>User Count:</strong> {deviceInfo.userCount ?? "Unknown"}
-            </p>
-            <p>
-              <strong>Attendance Count:</strong>{" "}
-              {deviceInfo.attendanceCount ?? "Unknown"}
-            </p>
+
             <p>
               <strong>Status:</strong> {deviceInfo.status || "Connected"}
             </p>

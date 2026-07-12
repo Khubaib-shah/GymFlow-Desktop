@@ -346,6 +346,17 @@ var import_electron = require("electron");
 function toErrorMessage(error) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const e = error;
+    if (typeof e.message === "string") return e.message;
+    if (typeof e.err === "string") return e.err;
+    if (typeof e.err?.message === "string") return e.err.message;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
+  }
   return "Unknown device error";
 }
 function normalizeSettings(raw = {}) {
@@ -433,6 +444,11 @@ var DeviceManager = class extends import_events.EventEmitter {
   pollTimer = null;
   lastConnectedAt = null;
   lastAttendanceFingerprint = /* @__PURE__ */ new Set();
+  isFirstPoll = true;
+  isReconnecting = false;
+  consecutiveFailures = 0;
+  /** Tracks the last emitted status message to avoid duplicate status events */
+  lastStatusEmitHash = null;
   constructor() {
     super();
   }
@@ -451,12 +467,14 @@ var DeviceManager = class extends import_events.EventEmitter {
     try {
       await this.client.connect(this.settings);
       this.connected = true;
+      this.consecutiveFailures = 0;
       this.lastConnectedAt = (/* @__PURE__ */ new Date()).toISOString();
-      this.emit("status", this.buildStatus("connected", "Connected successfully"));
+      this.emitStatusOnce("connected", "Connected successfully");
       return this.buildStatus("connected", "Connected successfully");
     } catch (error) {
       this.connected = false;
-      this.emit("status", this.buildStatus("offline", toErrorMessage(error)));
+      this.consecutiveFailures++;
+      this.emitStatusOnce("offline", toErrorMessage(error));
       throw error;
     }
   }
@@ -467,7 +485,7 @@ var DeviceManager = class extends import_events.EventEmitter {
     this.reconnectTimer = null;
     await this.client.disconnect();
     this.connected = false;
-    this.emit("status", this.buildStatus("disconnected", "Device disconnected"));
+    this.emitStatusOnce("disconnected", "Device disconnected");
   }
   async reconnect() {
     await this.disconnect();
@@ -595,46 +613,79 @@ var DeviceManager = class extends import_events.EventEmitter {
   startAutoLifecycle() {
     const settings = this.getSettings();
     if (!settings.enabled || !settings.ip) return;
+    this.lastStatusEmitHash = null;
+    this.initializeAttendanceFingerprint();
     this.startPolling();
     this.scheduleReconnect();
+  }
+  /** On startup, pre-populate the fingerprint set with ALL existing attendance logs
+   *  so they are never re-processed on app restart. This solves the issue of
+   *  re-matching old check-ins/check-outs every time the software starts. */
+  async initializeAttendanceFingerprint() {
+    try {
+      if (!this.connected) {
+        try {
+          await this.connect();
+        } catch {
+          return;
+        }
+      }
+      const logs = await this.client.getAttendance();
+      for (const log of logs) {
+        const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? "unknown"}-${log.timestamp ?? log.attTime ?? ""}`;
+        this.lastAttendanceFingerprint.add(key);
+      }
+      this.isFirstPoll = false;
+    } catch {
+    }
   }
   startPolling() {
     if (this.pollTimer) return;
     const interval = this.settings.pollInterval || DEFAULT_POLL_INTERVAL_MS;
     this.pollTimer = setInterval(async () => {
-      if (!this.connected) {
-        try {
-          await this.connect();
-        } catch {
-        }
-        return;
-      }
+      if (!this.connected) return;
       try {
-        const logs = await this.getAttendance();
+        const logs = await this.client.getAttendance();
         const newLogs = logs.filter((log) => {
           const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? "unknown"}-${log.timestamp ?? log.attTime ?? ""}`;
           return !this.lastAttendanceFingerprint.has(key);
         });
         this.lastAttendanceFingerprint = /* @__PURE__ */ new Set([...Array.from(this.lastAttendanceFingerprint).slice(-200), ...newLogs.map((item) => `${item.userId ?? item.uid ?? item.deviceUserId ?? "unknown"}-${item.timestamp ?? item.attTime ?? ""}`)]);
         if (newLogs.length > 0) {
-          this.emit("attendance", newLogs);
+          this.emit("attendance", newLogs, false);
         }
       } catch (error) {
-        this.emit("status", this.buildStatus("offline", toErrorMessage(error)));
-        this.connected = false;
+        if (this.connected) {
+          this.connected = false;
+          this.consecutiveFailures++;
+          this.emitStatusOnce("offline", toErrorMessage(error));
+        }
       }
     }, interval);
   }
   scheduleReconnect() {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setInterval(async () => {
-      if (!this.connected) {
+      if (!this.connected && !this.isReconnecting) {
+        this.isReconnecting = true;
         try {
+          if (this.consecutiveFailures > 5) {
+            return;
+          }
           await this.connect();
         } catch {
+        } finally {
+          this.isReconnecting = false;
         }
       }
     }, DEFAULT_RECONNECT_INTERVAL_MS);
+  }
+  /** Emits a status event only if the status message has changed, to prevent flickering */
+  emitStatusOnce(status, message) {
+    const hash = `${status}:${message}`;
+    if (this.lastStatusEmitHash === hash) return;
+    this.lastStatusEmitHash = hash;
+    this.emit("status", this.buildStatus(status, message));
   }
   buildStatus(status, message) {
     return {
@@ -698,7 +749,11 @@ function validateCheckIn(member) {
   if (!member) {
     return { allowed: false, reason: "Member not found" };
   }
-  if (member.status !== "ACTIVE") {
+  const status = (member.status || "").toUpperCase();
+  if (status === "LEAD") {
+    return { allowed: true };
+  }
+  if (status !== "ACTIVE") {
     return { allowed: false, reason: `Member status is ${member.status}` };
   }
   if (!member.planId) {
@@ -782,46 +837,52 @@ function registerDeviceAttendanceBridge(args) {
   const sendToRenderer = (channel, data) => {
     getMainWindow2()?.webContents.send(channel, data);
   };
-  deviceManager.on("attendance", async (newLogs) => {
+  deviceManager.on("attendance", async (newLogs, silent = false) => {
     try {
       for (const logItem of newLogs) {
         const deviceUserIdRaw = logItem.userId ?? logItem.deviceUserId ?? logItem.uid ?? null;
         const deviceUserId = deviceUserIdRaw == null ? null : Number(deviceUserIdRaw);
         if (!deviceUserId || Number.isNaN(deviceUserId)) {
-          sendToRenderer("attendance:unknown", {
-            reason: "missing-device-user-id",
-            deviceUserId: deviceUserIdRaw,
-            deviceLog: logItem
-          });
+          if (!silent) {
+            sendToRenderer("attendance:unknown", {
+              reason: "missing-device-user-id",
+              deviceUserId: deviceUserIdRaw,
+              deviceLog: logItem
+            });
+          }
           continue;
         }
         const member = await getMemberByDeviceUserId(deviceUserId);
         if (!member) {
-          sendToRenderer("attendance:unknown", {
-            deviceUserId,
-            deviceLog: logItem
-          });
+          if (!silent) {
+            sendToRenderer("attendance:unknown", {
+              deviceUserId,
+              deviceLog: logItem
+            });
+          }
           continue;
         }
         const state = validateMembershipStateFromMember(member);
         const checkInValidation = validateCheckIn(member);
         if (!checkInValidation.allowed) {
-          if (state === "EXPIRED") {
-            sendToRenderer("attendance:expired", {
-              memberId: member.id,
-              deviceUserId,
-              state,
-              reason: checkInValidation.reason,
-              deviceLog: logItem
-            });
-          } else {
-            sendToRenderer("attendance:inactive", {
-              memberId: member.id,
-              deviceUserId,
-              state,
-              reason: checkInValidation.reason,
-              deviceLog: logItem
-            });
+          if (!silent) {
+            if (state === "EXPIRED") {
+              sendToRenderer("attendance:expired", {
+                memberId: member.id,
+                deviceUserId,
+                state,
+                reason: checkInValidation.reason,
+                deviceLog: logItem
+              });
+            } else {
+              sendToRenderer("attendance:inactive", {
+                memberId: member.id,
+                deviceUserId,
+                state,
+                reason: checkInValidation.reason,
+                deviceLog: logItem
+              });
+            }
           }
           continue;
         }
@@ -831,13 +892,15 @@ function registerDeviceAttendanceBridge(args) {
           deviceUserId,
           logItem
         });
-        sendToRenderer(result.ipcEvent, {
-          member,
-          deviceUserId,
-          attendance: result.attendance,
-          membershipState: state,
-          deviceLog: logItem
-        });
+        if (!silent) {
+          sendToRenderer(result.ipcEvent, {
+            member,
+            deviceUserId,
+            attendance: result.attendance,
+            membershipState: state,
+            deviceLog: logItem
+          });
+        }
         deviceLogger.info("Attendance bridged", {
           ipcEvent: result.ipcEvent,
           memberId: member.id,
@@ -1145,12 +1208,16 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
     });
   });
   ipcMain2.handle("members:create", async (_, data) => {
-    const lastMember = await prisma2.member.findFirst({
-      where: { employeeNo: { not: null } },
-      orderBy: { employeeNo: "desc" },
-      select: { employeeNo: true }
-    });
-    const nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+    const isActive = data.status === "ACTIVE";
+    let nextEmployeeNo = null;
+    if (isActive) {
+      const lastMember = await prisma2.member.findFirst({
+        where: { employeeNo: { not: null } },
+        orderBy: { employeeNo: "desc" },
+        select: { employeeNo: true }
+      });
+      nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+    }
     let member;
     try {
       member = await prisma2.member.create({
@@ -1170,6 +1237,13 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
     }
     let deviceSynced = false;
     let deviceError;
+    if (!isActive) {
+      return {
+        ...member,
+        deviceSynced: false,
+        deviceError: void 0
+      };
+    }
     const memberName = `${data.firstName || ""} ${data.lastName || ""}`.trim();
     try {
       const userPayload = {
@@ -1279,10 +1353,47 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
     };
   });
   ipcMain2.handle("members:update", async (_, id, data) => {
-    const member = await prisma2.member.update({
+    let member = await prisma2.member.update({
       where: { id },
       data
     });
+    if (member.status === "ACTIVE" && !member.employeeNo) {
+      const lastMember = await prisma2.member.findFirst({
+        where: { employeeNo: { not: null } },
+        orderBy: { employeeNo: "desc" },
+        select: { employeeNo: true }
+      });
+      const nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+      member = await prisma2.member.update({
+        where: { id },
+        data: { employeeNo: nextEmployeeNo }
+      });
+      try {
+        const memberName = `${member.firstName || ""} ${member.lastName || ""}`.trim();
+        await deviceManager.addUser({
+          uid: nextEmployeeNo,
+          id: nextEmployeeNo,
+          userId: nextEmployeeNo,
+          employeeNo: nextEmployeeNo,
+          name: memberName,
+          fullName: memberName,
+          firstName: member.firstName,
+          lastName: member.lastName,
+          privilege: 0,
+          password: "",
+          enabled: true,
+          startDate: formatDeviceDate(member.membershipStart),
+          endDate: formatDeviceDate(member.membershipEnd)
+        });
+        await prisma2.member.update({
+          where: { id: member.id },
+          data: { deviceSynced: true }
+        });
+        deviceLogger2.info("Assigned ID and synced upgraded member to device", { employeeNo: nextEmployeeNo });
+      } catch (error) {
+        deviceLogger2.error("Failed to create upgraded member on device", { error: error.message });
+      }
+    }
     if (member.employeeNo) {
       try {
         const memberName = `${member.firstName || ""} ${member.lastName || ""}`.trim();
@@ -1339,20 +1450,43 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
   ipcMain2.handle("members:getDeviceSyncStatus", async () => {
     try {
       const deviceUsers = await deviceManager.getUsers();
-      const deviceUids = new Set(
-        deviceUsers.map((u) => Number(u.uid ?? u.userId)).filter((n) => !Number.isNaN(n))
-      );
+      const deviceUsersMap = /* @__PURE__ */ new Map();
+      for (const u of deviceUsers) {
+        const uid = Number(u.uid ?? u.userId);
+        if (!Number.isNaN(uid)) {
+          deviceUsersMap.set(uid, u);
+        }
+      }
       const members = await prisma2.member.findMany({
-        select: { id: true, employeeNo: true, deviceSynced: true }
+        select: { id: true, employeeNo: true, deviceSynced: true, firstName: true, lastName: true }
       });
-      return {
-        success: true,
-        data: members.map((m) => ({
+      const updatedStatus = [];
+      for (const m of members) {
+        const onDevice = m.employeeNo != null ? deviceUsersMap.has(m.employeeNo) : false;
+        if (onDevice) {
+          const dUser = deviceUsersMap.get(m.employeeNo);
+          const dName = (dUser.name || "").trim();
+          const localName = `${m.firstName || ""} ${m.lastName || ""}`.trim();
+          if (dName && dName !== localName) {
+            const parts = dName.split(" ");
+            const newFirst = parts[0];
+            const newLast = parts.slice(1).join(" ");
+            await prisma2.member.update({
+              where: { id: m.id },
+              data: { firstName: newFirst, lastName: newLast }
+            });
+          }
+        }
+        updatedStatus.push({
           id: m.id,
           employeeNo: m.employeeNo,
           deviceSynced: m.deviceSynced,
-          onDevice: m.employeeNo != null ? deviceUids.has(m.employeeNo) : false
-        }))
+          onDevice
+        });
+      }
+      return {
+        success: true,
+        data: updatedStatus
       };
     } catch (error) {
       return { success: false, data: [] };
