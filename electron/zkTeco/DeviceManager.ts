@@ -19,11 +19,19 @@ export class DeviceManager extends EventEmitter {
   private isFirstPoll = true;
   private isReconnecting = false;
   private consecutiveFailures = 0;
+  /** Tracks whether initial sync has been done */
+  private initialSyncDone = false;
+  /** Tracks if we're in initial sync mode (polling disabled) */
+  private skipPolling = true;
   /** Tracks the last emitted status message to avoid duplicate status events */
   private lastStatusEmitHash: string | null = null;
+  /** Prevents timer callbacks from running after disconnect/cleanup */
+  private disposed = false;
 
   constructor() {
     super();
+    // Prevent MaxListenersExceededWarning - the bridge registers 'attendance' and 'status' listeners
+    this.setMaxListeners(20);
   }
 
   async applySettings(settings: Partial<ZkTecoDeviceSettings>): Promise<ZkTecoDeviceSettings> {
@@ -57,6 +65,7 @@ export class DeviceManager extends EventEmitter {
   }
 
   async disconnect(): Promise<void> {
+    this.disposed = true;
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.reconnectTimer) clearInterval(this.reconnectTimer);
     this.pollTimer = null;
@@ -83,29 +92,9 @@ export class DeviceManager extends EventEmitter {
       }
       const users = await this.getUsers();
       const attendance = await this.getAttendance();
-      // `info` may have different shapes depending on the client/library version.
-      // Cast to `any` so TypeScript allows checking multiple possible property names.
-      const infoAny: any = info;
-      const firmwareVersion = infoAny?.firmwareVersion
-        || infoAny?.firmware
-        || infoAny?.firmwareVer
-        || infoAny?.ver
-        || infoAny?.version
-        || infoAny?.firmware_ver
-        || infoAny?.firmVer
-        || infoAny?.firmver
-        || 'Unknown';
-
-      const serialNumber = infoAny?.serialNumber
-        || infoAny?.serial
-        || infoAny?.sn
-        || infoAny?.deviceSerial
-        || undefined;
 
       return {
         ...status,
-        firmwareVersion,
-        serialNumber,
         userCount: users.length,
         attendanceCount: attendance.length,
       };
@@ -233,28 +222,74 @@ export class DeviceManager extends EventEmitter {
     this.scheduleReconnect();
   }
 
-  /** On startup, pre-populate the fingerprint set with ALL existing attendance logs
-   *  so they are never re-processed on app restart. This solves the issue of
-   *  re-matching old check-ins/check-outs every time the software starts. */
+  /**
+   * Sync all existing attendance records from the device.
+   * This is called after the app starts to fetch attendance that was recorded
+   * while the application was closed. It emits events for the bridge to process.
+   * On first call, it processes ALL logs (not just new ones).
+   */
+  async syncAttendance(): Promise<{ success: boolean; data?: { total: number }; error?: string }> {
+    if (!this.connected) {
+      try {
+        await this.connect();
+      } catch (error) {
+        return { success: false, error: toErrorMessage(error) };
+      }
+    }
+
+    try {
+      const logs = await this.client.getAttendance();
+
+      // On first sync (startup), process ALL logs to catch up with attendance
+      // recorded while the app was closed. Otherwise, only process new logs.
+      let logsToProcess: any[];
+      if (!this.initialSyncDone) {
+        // First sync: process all logs (polling was skipped, so nothing to filter)
+        logsToProcess = logs;
+        this.initialSyncDone = true;
+        this.skipPolling = false; // Enable polling after initial sync
+      } else {
+        // Subsequent syncs: only process logs not already seen
+        logsToProcess = logs.filter((log: any) => {
+          const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
+          return !this.lastAttendanceFingerprint.has(key);
+        });
+      }
+
+      // Emit events for the bridge to process
+      if (logsToProcess.length > 0) {
+        this.emit('attendance', logsToProcess, true);
+      }
+
+      // Mark all processed logs as seen
+      for (const log of logsToProcess) {
+        const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
+        this.lastAttendanceFingerprint.add(key);
+      }
+
+      return { success: true, data: { total: logsToProcess.length } };
+    } catch (error) {
+      return { success: false, error: toErrorMessage(error) };
+    }
+  }
+
+  /** On startup, connect to device only. The fingerprint set and polling are handled
+   *  in syncAttendance() to ensure logs are processed when the renderer is ready. */
   private async initializeAttendanceFingerprint(): Promise<void> {
     try {
-      // Manually connect first to get logs without triggering auto-connect side effects
+      // Connect to device if not already connected
       if (!this.connected) {
         try {
           await this.connect();
         } catch {
-          // Device not reachable at startup - fingerprint will populate on first poll
+          // Device not reachable at startup - sync will happen on reconnect
           return;
         }
       }
-      const logs = await this.client.getAttendance();
-      for (const log of logs) {
-        const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
-        this.lastAttendanceFingerprint.add(key);
-      }
-      this.isFirstPoll = false; // skip first-poll logic entirely
+      // Don't populate fingerprint set here - let syncAttendance() handle it
+      this.isFirstPoll = false;
     } catch {
-      // If device is unreachable at startup, we'll populate on first successful poll
+      // If device is unreachable at startup, we'll sync on reconnect
     }
   }
 
@@ -262,7 +297,8 @@ export class DeviceManager extends EventEmitter {
     if (this.pollTimer) return;
     const interval = this.settings.pollInterval || DEFAULT_POLL_INTERVAL_MS;
     this.pollTimer = setInterval(async () => {
-      if (!this.connected) return; // scheduleReconnect handles reconnection
+      // Skip polling if we're still in initial sync mode (renderer not ready yet)
+      if (this.disposed || !this.connected || this.skipPolling) return;
       try {
         // Directly call client.getAttendance() to avoid triggering auto-connect
         const logs = await this.client.getAttendance();
@@ -270,7 +306,16 @@ export class DeviceManager extends EventEmitter {
           const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
           return !this.lastAttendanceFingerprint.has(key);
         });
-        this.lastAttendanceFingerprint = new Set([...Array.from(this.lastAttendanceFingerprint).slice(-200), ...newLogs.map((item: any) => `${item.userId ?? item.uid ?? item.deviceUserId ?? 'unknown'}-${item.timestamp ?? item.attTime ?? ''}`)]);
+        // Keep fingerprint set bounded to last 500 entries to avoid memory bloat
+        const updatedSet = new Set<string>();
+        const existing = Array.from(this.lastAttendanceFingerprint);
+        // Keep the most recent entries (up to 500) plus the new ones
+        const toKeep = existing.slice(-500);
+        for (const k of toKeep) updatedSet.add(k);
+        for (const item of newLogs) {
+          updatedSet.add(`${item.userId ?? item.uid ?? item.deviceUserId ?? 'unknown'}-${item.timestamp ?? item.attTime ?? ''}`);
+        }
+        this.lastAttendanceFingerprint = updatedSet;
 
         if (newLogs.length > 0) {
           this.emit('attendance', newLogs, false);
@@ -289,21 +334,26 @@ export class DeviceManager extends EventEmitter {
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setInterval(async () => {
-      if (!this.connected && !this.isReconnecting) {
-        this.isReconnecting = true;
-        try {
-          // Exponential backoff: skip reconnect attempts if we've failed too many times recently
-          if (this.consecutiveFailures > 5) {
-            // Wait longer between retries: skip this interval if we've failed >5 times
-            // The next interval will try again
-            return;
-          }
-          await this.connect();
-        } catch {
-          // retry on next interval
-        } finally {
-          this.isReconnecting = false;
+      if (this.disposed || !this.connected || this.isReconnecting) return;
+      this.isReconnecting = true;
+      try {
+        // Exponential backoff: increase interval based on consecutive failures
+        const backoffMs = Math.min(
+          1000 * Math.pow(2, Math.min(this.consecutiveFailures, 10)),
+          300000 // cap at 5 minutes
+        );
+        // Skip this cycle if we're still in backoff period
+        const now = Date.now();
+        const lastFailure = (this as any)._lastFailureTime || 0;
+        if (now - lastFailure < backoffMs) {
+          return;
         }
+        (this as any)._lastFailureTime = now;
+        await this.connect();
+      } catch {
+        // retry on next interval
+      } finally {
+        this.isReconnecting = false;
       }
     }, DEFAULT_RECONNECT_INTERVAL_MS);
   }

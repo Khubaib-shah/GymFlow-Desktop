@@ -109,9 +109,16 @@ app.whenReady().then(async () => {
     });
   };
 
+  const getTrainerByDeviceUserId = async (deviceUserId: number) => {
+    return await prisma.trainer.findFirst({
+      where: { employeeNo: deviceUserId }
+    });
+  };
+
   registerDeviceAttendanceBridge({
     prisma,
     getMemberByDeviceUserId,
+    getTrainerByDeviceUserId,
     getMainWindow,
   });
 
@@ -121,6 +128,14 @@ app.whenReady().then(async () => {
   const settings = deviceManager.getSettings();
   if (settings.enabled && settings.ip) {
     deviceManager.startAutoLifecycle();
+
+    // Perform initial attendance sync after the window is ready
+    // This catches attendance recorded while the app was closed
+    setTimeout(async () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        await deviceManager.syncAttendance();
+      }
+    }, 2000); // Wait 2 seconds for renderer to be ready
   }
 
   app.on('activate', () => {
@@ -133,5 +148,19 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
+  }
+});
+
+// Cleanup on quit to prevent SQLite locks, device socket leaks, and orphaned timers
+app.on('before-quit', async () => {
+  try {
+    deviceManager.disconnect();
+  } catch {
+    // ignore cleanup errors
+  }
+  try {
+    await prisma.$disconnect();
+  } catch {
+    // ignore cleanup errors
   }
 });

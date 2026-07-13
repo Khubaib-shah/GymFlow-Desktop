@@ -3,8 +3,6 @@ import { DeviceUser } from "../types";
 
 export function createUserPacket(user: DeviceUser): Buffer {
   const packet = Buffer.alloc(72);
-  console.log(user);
-  console.log(typeof user.userId);
   // -------------------
   // UID (2 bytes)
   // -------------------

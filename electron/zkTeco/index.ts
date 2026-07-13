@@ -1,7 +1,6 @@
 export * from './DeviceManager';
 export * from './ZKClient';
 export * from './DeviceSettings';
-export * from './AttendanceSync';
 export * from './DeviceAttendanceBridge';
 export * from './constants';
 export * from './types';

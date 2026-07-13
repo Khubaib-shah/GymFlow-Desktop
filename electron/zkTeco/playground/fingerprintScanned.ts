@@ -11,7 +11,7 @@ import { ZKClient } from "../ZKClient";
     timeout: 10000,
     pollInterval: 5000,
   });
-  await client.registerRealtimeEvents();
+  // Note: registerRealtimeEvents is not implemented in ZKClient - using getAttendance polling instead
   const attendence = await client.getAttendance();
   console.log(attendence);
   setInterval(async () => {

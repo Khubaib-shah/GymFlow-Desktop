@@ -45,17 +45,17 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: Pri
 
     try {
       await prisma.$disconnect();
-      
+
       if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
       if (fs.existsSync(`${dbPath}-shm`)) fs.unlinkSync(`${dbPath}-shm`);
-      
+
       fs.copyFileSync(filePaths[0], dbPath);
       app.relaunch();
-      app.exit(0);
+      app.quit();
       return { success: true };
     } catch (error: any) {
       console.error('Restore error:', error);
-      await prisma.$connect().catch(() => {});
+      await prisma.$connect().catch(() => { });
       return { success: false, error: error.message };
     }
   });
@@ -84,7 +84,7 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: Pri
           });
         });
         db.close();
-        
+
         await prisma.$connect();
         return { success: true };
       } else {
@@ -93,18 +93,18 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: Pri
         if (!fs.existsSync(pristineDb)) {
           return { success: false, error: 'Pristine database not found in app resources.' };
         }
-        
+
         if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
         if (fs.existsSync(`${dbPath}-shm`)) fs.unlinkSync(`${dbPath}-shm`);
 
         fs.copyFileSync(pristineDb, dbPath);
         app.relaunch();
-        app.exit(0);
+        app.quit();
         return { success: true };
       }
     } catch (error: any) {
       console.error('Reset DB error:', error);
-      await prisma.$connect().catch(() => {});
+      await prisma.$connect().catch(() => { });
       return { success: false, error: error.message };
     }
   });

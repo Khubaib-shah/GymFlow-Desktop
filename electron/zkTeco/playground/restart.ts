@@ -9,7 +9,7 @@ const ZKLib = require("node-zklib");
 
   console.log("Connected");
 
-  const response = await zk.executeCmd(COMMANDS.RESTART);
+  const response = await zk.executeCmd(COMMANDS.CMD_RESTART);
 
   console.log(response);
 

@@ -87,6 +87,13 @@ contextBridge.exposeInMainWorld("api", {
     getConfig: () => ipcRenderer.invoke("device:get-config"),
 
     /**
+     * Sync all existing attendance records from the device.
+     * This is useful when the app was closed while the device was on,
+     * and we need to fetch attendance that was recorded during that time.
+     */
+    syncAttendance: () => ipcRenderer.invoke("device:sync-attendance"),
+
+    /**
      * Subscribe to attendance events from the device.
      * Returns a cleanup function that MUST be called on component unmount
      * to prevent listener leaks.
@@ -99,12 +106,16 @@ contextBridge.exposeInMainWorld("api", {
       const inactiveListener = (_: any, data: any) =>
         callback("inactive", data);
       const unknownListener = (_: any, data: any) => callback("unknown", data);
+      const trainerCheckinListener = (_: any, data: any) => callback("trainerCheckin", data);
+      const trainerCheckoutListener = (_: any, data: any) => callback("trainerCheckout", data);
 
       ipcRenderer.on("attendance:checkin", checkinListener);
       ipcRenderer.on("attendance:checkout", checkoutListener);
       ipcRenderer.on("attendance:expired", expiredListener);
       ipcRenderer.on("attendance:inactive", inactiveListener);
       ipcRenderer.on("attendance:unknown", unknownListener);
+      ipcRenderer.on("trainerAttendance:checkin", trainerCheckinListener);
+      ipcRenderer.on("trainerAttendance:checkout", trainerCheckoutListener);
 
       // Return cleanup function
       return () => {
@@ -113,6 +124,8 @@ contextBridge.exposeInMainWorld("api", {
         ipcRenderer.removeListener("attendance:expired", expiredListener);
         ipcRenderer.removeListener("attendance:inactive", inactiveListener);
         ipcRenderer.removeListener("attendance:unknown", unknownListener);
+        ipcRenderer.removeListener("trainerAttendance:checkin", trainerCheckinListener);
+        ipcRenderer.removeListener("trainerAttendance:checkout", trainerCheckoutListener);
       };
     },
     onStatusChange: (callback: (status: any) => void) => {
@@ -120,6 +133,25 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.on("device:status", listener);
       return () => {
         ipcRenderer.removeListener("device:status", listener);
+      };
+    },
+    syncUsers: () => ipcRenderer.invoke("device:sync-users"),
+
+    /**
+     * Subscribe to auto-created events from device sync.
+     * Fires when a fingerprint scan triggers automatic member/trainer creation.
+     * Returns a cleanup function.
+     */
+    onAutoCreated: (callback: (type: "member" | "trainer", data: any) => void) => {
+      const memberListener = (_: any, data: any) => callback("member", data);
+      const trainerListener = (_: any, data: any) => callback("trainer", data);
+
+      ipcRenderer.on("member:auto-created", memberListener);
+      ipcRenderer.on("trainer:auto-created", trainerListener);
+
+      return () => {
+        ipcRenderer.removeListener("member:auto-created", memberListener);
+        ipcRenderer.removeListener("trainer:auto-created", trainerListener);
       };
     },
   },

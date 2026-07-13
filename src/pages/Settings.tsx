@@ -20,11 +20,13 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
     setAdmissionFee(localStorage.getItem("admission_fee") || "4000");
 
     (window as any).api.device
       .getSettings()
       .then((response: any) => {
+        if (!mounted) return;
         const config = response?.data ?? response;
         setEnabled(Boolean(config?.enabled));
         setDeviceType(config?.deviceType || "zkteco-k70");
@@ -38,11 +40,13 @@ export default function Settings() {
     (window as any).api.device
       .getStatus()
       .then((res: any) => {
+        if (!mounted) return;
         const s = res?.data ?? res;
         if (s?.connected) {
           setStatus("connected");
           // Automatically fetch detailed device info (user/attendance count)
           (window as any).api.device.testConnection().then((testRes: any) => {
+            if (!mounted) return;
             if (testRes?.success) {
               setDeviceInfo(testRes.data);
             }
@@ -58,12 +62,14 @@ export default function Settings() {
     let cleanupStatus: (() => void) | undefined;
     if (api?.device?.onStatusChange) {
       cleanupStatus = api.device.onStatusChange((s: any) => {
+        if (!mounted) return;
         setDeviceStatus(s);
         if (s?.connected) {
           setStatus("connected");
           setError("");
           // Automatically fetch detailed device info
           (window as any).api.device.testConnection().then((testRes: any) => {
+            if (!mounted) return;
             if (testRes?.success) {
               setDeviceInfo(testRes.data);
             }
@@ -78,6 +84,7 @@ export default function Settings() {
     }
 
     return () => {
+      mounted = false;
       if (cleanupStatus) cleanupStatus();
     };
   }, []);

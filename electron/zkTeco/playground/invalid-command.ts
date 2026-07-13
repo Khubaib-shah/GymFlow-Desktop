@@ -1,7 +1,7 @@
-const ZKLib = require("node-zklib");
+const IMZKLib = require("node-zklib");
 
 (async () => {
-  const zk = new ZKLib("192.168.1.13", 4370, 10000, 4000);
+  const zk = new IMZKLib("192.168.1.13", 4370, 10000, 4000);
 
   await zk.createSocket();
 

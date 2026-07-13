@@ -8,7 +8,7 @@ import { COMMANDS } from "../constants";
 
   console.log("Connected");
 
-  const response = await zk.executeCmd(COMMANDS.DISABLE_DEVICE);
+  const response = await zk.executeCmd(COMMANDS.CMD_DISABLEDEVICE);
 
   console.log(response);
 

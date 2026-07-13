@@ -22,7 +22,10 @@ import { ZKClient } from "../ZKClient";
   console.log("Deleting UID:", users[0].uid);
 
   // <-- THIS is the important line
-  await client.deleteUser(users[0].uid);
+  // Ensure uid is defined before calling deleteUser
+  if (users[0].uid !== undefined) {
+    await client.deleteUser(users[0].uid);
+  }
 
   const usersAfter = await client.getUsers();
 

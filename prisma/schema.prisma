@@ -47,19 +47,21 @@ model Member {
 }
 
 model Trainer {
-  id        String   @id @default(cuid())
-  firstName String
-  lastName  String?
-  phone     String?
-  specialty String?
-  cnic      String?   @unique
-  dob       DateTime?
-  gender    String?
-  address   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  employeeNo   Int?     @unique
+  deviceSynced Boolean  @default(false)
+  firstName    String
+  lastName     String?
+  phone        String?
+  specialty    String?
+  cnic         String?  @unique
+  dob          DateTime?
+  gender       String?
+  address      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
   
-  members   Member[]
+  members      Member[]
   trainerAttendances TrainerAttendance[]
 }
 

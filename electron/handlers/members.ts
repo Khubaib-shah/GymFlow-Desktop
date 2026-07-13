@@ -198,7 +198,12 @@ export function registerMembersHandlers(
             error: err?.message,
           });
         }
-      })();
+      })().catch((err: any) => {
+        deviceLogger.error("Unhandled error in enrollment watcher", {
+          employeeNo: nextEmployeeNo,
+          error: err?.message,
+        });
+      });
 
       // Update sync flag in SQLite
       await prisma.member.update({
@@ -254,7 +259,12 @@ export function registerMembersHandlers(
               error: err?.message,
             });
           }
-        })();
+        })().catch((err: any) => {
+          deviceLogger.error("Unhandled error in manual enrollment watcher", {
+            employeeNo: nextEmployeeNo,
+            error: err?.message,
+          });
+        });
       } else {
         deviceError = msg;
         deviceLogger.userCreateFailed(nextEmployeeNo as number, memberName, msg);
@@ -302,7 +312,6 @@ export function registerMembersHandlers(
           lastName: member.lastName,
           privilege: 0,
           password: "",
-          enabled: true,
           startDate: formatDeviceDate(member.membershipStart),
           endDate: formatDeviceDate(member.membershipEnd),
         });
@@ -404,25 +413,6 @@ export function registerMembersHandlers(
 
       for (const m of members) {
         const onDevice = m.employeeNo != null ? deviceUsersMap.has(m.employeeNo) : false;
-
-        // Sync name from device to local DB if it differs
-        if (onDevice) {
-          const dUser = deviceUsersMap.get(m.employeeNo);
-          const dName = (dUser.name || "").trim();
-          const localName = `${m.firstName || ""} ${m.lastName || ""}`.trim();
-
-          if (dName && dName !== localName) {
-            // Split dName into first and last
-            const parts = dName.split(" ");
-            const newFirst = parts[0];
-            const newLast = parts.slice(1).join(" ");
-
-            await prisma.member.update({
-              where: { id: m.id },
-              data: { firstName: newFirst, lastName: newLast }
-            });
-          }
-        }
 
         updatedStatus.push({
           id: m.id,

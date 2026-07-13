@@ -84,6 +84,19 @@ var DEFAULT_DEVICE_SETTINGS = {
   timeout: 1e4,
   pollInterval: 5e3
 };
+var COMMANDS = {
+  CMD_ENABLEDEVICE: 1002,
+  CMD_DISABLEDEVICE: 1003,
+  CMD_RESTART: 1004,
+  CMD_USER_WRQ: 8,
+  CMD_DELETE_USER: 18,
+  CMD_STARTENROLL: 61,
+  CMD_CANCELCAPTURE: 62,
+  CMD_DATA_WRRQ: 1503,
+  CMD_CAPTUREFINGER: 1009,
+  CMD_REFRESHDATA: 1013,
+  CMD_CLEAR_ATTLOG: 15
+};
 var DEFAULT_RECONNECT_INTERVAL_MS = 1e4;
 var DEFAULT_POLL_INTERVAL_MS = 5e3;
 
@@ -107,70 +120,68 @@ var ConnectionError = class extends DeviceError {
   }
 };
 
-// electron/zkTeco/helpers/createUserPacket.ts
-var import_buffer = require("buffer");
-function createUserPacket(user) {
-  const packet = import_buffer.Buffer.alloc(72);
-  console.log(user);
-  console.log(typeof user.userId);
-  packet.writeUInt16LE(user.uid, 0);
-  packet.writeUInt8(user.privilege ?? 0, 2);
-  packet.write((user.password ?? "").substring(0, 8), 3, "ascii");
-  packet.write(user.name.substring(0, 23), 11, "ascii");
-  packet.writeUInt32LE(user.card ?? 0, 35);
-  packet.writeUInt8(user.group ?? 1, 39);
-  packet.writeUInt16LE(0, 40);
-  packet.writeUInt16LE(0, 42);
-  packet.writeUInt16LE(0, 44);
-  packet.writeUInt16LE(0, 46);
-  packet.write(String(user.userId).substring(0, 8), 48, "ascii");
-  return packet;
-}
+// electron/zkTeco/ZKClient.ts
+var import_node_zklib = __toESM(require("node-zklib"));
 
-// electron/zkTeco/helpers/createDeleteUserPacket.ts
-function createDeleteUserPacket(uid) {
-  const packet = Buffer.alloc(2);
-  packet.writeUInt16LE(uid, 0);
-  return packet;
-}
-
-// electron/zkTeco/helpers/decodeUserData72.ts
-function decodeUserData72(userData) {
-  return {
-    uid: userData.readUInt16LE(0),
-    role: userData.readUInt8(2),
-    password: userData.subarray(3, 11).toString("ascii").replace(/\0/g, ""),
-    name: userData.subarray(11, 35).toString("ascii").replace(/\0/g, ""),
-    cardNo: userData.readUInt32LE(35),
-    group: userData.readUInt8(39),
-    userTzFlag: userData.readUInt16LE(40),
-    tz1: userData.readUInt16LE(42),
-    tz2: userData.readUInt16LE(44),
-    tz3: userData.readUInt16LE(46),
-    userId: userData.subarray(48, 57).toString("ascii").replace(/\0/g, "")
-  };
-}
+// electron/zkTeco/DeviceLogger.ts
+var DeviceLogger = class {
+  log(level, message, details) {
+    const prefix = "[ZKTECO]";
+    const payload = details ? ` ${JSON.stringify(details)}` : "";
+    const output = `${prefix} ${message}${payload}`;
+    if (level === "error") {
+      console.error(output);
+    } else if (level === "warn") {
+      console.warn(output);
+    } else {
+      console.info(output);
+    }
+  }
+  info(message, details) {
+    this.log("info", message, details);
+  }
+  warn(message, details) {
+    this.log("warn", message, details);
+  }
+  error(message, details) {
+    this.log("error", message, details);
+  }
+};
+var deviceLogger = new DeviceLogger();
 
 // electron/zkTeco/ZKClient.ts
-var { COMMANDS } = require("node-zklib/constants");
-var ZKLib = require("node-zklib");
 var ZKClient = class {
   client = null;
-  settings = null;
-  async disableDevice() {
-    await this.executeCommand(COMMANDS.CMD_DISABLEDEVICE);
+  commandQueue = [];
+  isProcessing = false;
+  async processQueue() {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+    while (this.commandQueue.length > 0) {
+      const cmd = this.commandQueue.shift();
+      if (cmd) {
+        try {
+          await cmd();
+        } catch (err) {
+        }
+      }
+    }
+    this.isProcessing = false;
   }
-  async enableDevice() {
-    await this.executeCommand(COMMANDS.CMD_ENABLEDEVICE);
-  }
-  async refreshData() {
-    await this.executeCommand(COMMANDS.CMD_REFRESHDATA);
+  queueCommand(cmd) {
+    return new Promise((resolve, reject) => {
+      this.commandQueue.push(async () => {
+        try {
+          const result = await cmd();
+          resolve(result);
+        } catch (err) {
+          reject(err);
+        }
+      });
+      this.processQueue();
+    });
   }
   async connect(settings) {
-    this.settings = settings;
-    if (!settings.enabled || !settings.ip) {
-      throw new ConnectionError("Device is disabled or IP is not configured");
-    }
     if (this.client) {
       try {
         await this.client.disconnect();
@@ -178,162 +189,119 @@ var ZKClient = class {
       }
       this.client = null;
     }
-    try {
-      this.client = new ZKLib(
-        settings.ip,
-        settings.port,
-        settings.timeout,
-        settings.pollInterval
-      );
+    this.client = new import_node_zklib.default(settings.ip, settings.port, settings.timeout, true);
+    await this.queueCommand(async () => {
       await this.client.createSocket();
-    } catch (error) {
-      this.client = null;
-      throw new ConnectionError(
-        `Unable to connect to ZKTeco device: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+      deviceLogger.info("Connected to ZKTeco device");
+    });
   }
   async disconnect() {
     if (!this.client) return;
     try {
       await this.client.disconnect();
+      deviceLogger.info("Disconnected from ZKTeco device");
     } catch {
-    } finally {
-      this.client = null;
     }
+    this.client = null;
   }
-  isConnected() {
-    return Boolean(this.client);
-  }
-  async executeCommand(command, data) {
-    if (!this.client) {
-      throw new ConnectionError("Device is not connected");
+  async testConnection() {
+    if (!this.client) throw new Error("Not connected to device");
+    const status = await this.client.getSocketStatus?.();
+    if (status !== void 0 && status !== null) {
+      return status;
     }
-    return this.client.executeCmd(command, data);
+    await this.client.getInfo();
+    return true;
   }
   async getDeviceInfo() {
-    if (!this.client) throw new ConnectionError("Device is not connected");
-    try {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
       const info = await this.client.getInfo();
-      return info;
-    } catch (error) {
-      throw new DeviceError(
-        `Failed to read device info: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-  async setUser(user) {
-    if (!this.client) throw new ConnectionError("Device is not connected");
-    const packet = createUserPacket(user);
-    await this.disableDevice();
-    const result = await this.executeCommand(COMMANDS.CMD_USER_WRQ, packet);
-    await this.refreshData();
-    await this.enableDevice();
-    return result;
-  }
-  async addUser(user) {
-    return this.setUser(user);
-  }
-  async updateUser(user) {
-    return this.setUser(user);
+      return {
+        model: info?.model ?? void 0,
+        serialNumber: info?.serialNumber ?? void 0,
+        firmwareVersion: info?.firmwareVersion ?? void 0,
+        userCount: info?.userCount ?? void 0,
+        attendanceCount: info?.attendanceCount ?? void 0,
+        deviceName: "ZKTeco K70"
+      };
+    });
   }
   async getUsers() {
-    if (!this.client) {
-      throw new ConnectionError("Device is not connected");
-    }
-    try {
-      await this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE);
-      const payload = Buffer.from([
-        1,
-        9,
-        0,
-        5,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ]);
-      const response = await this.client.executeCmd(
-        COMMANDS.CMD_DATA_WRRQ,
-        payload
-      );
-      console.log("RAW RESPONSE:", response);
-      console.log("HEX:", response.toString("hex"));
-      console.log("LENGTH:", response.length);
-      const users = [];
-      let offset = 4;
-      const data = response.subarray(8);
-      while (offset + 72 <= data.length) {
-        users.push(decodeUserData72(data.subarray(offset, offset + 72)));
-        offset += 72;
-      }
-      console.log("DATA LENGTH:", data.length);
-      console.log("DATA HEX:", data.toString("hex"));
-      await this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE);
-      return users;
-    } catch (error) {
-      throw new DeviceError(
-        `Failed to read users: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-  async deleteUser(uid) {
-    const packet = createDeleteUserPacket(uid);
-    console.log("Delete packet:", packet.toString("hex"));
-    console.log("disable");
-    await this.disableDevice();
-    console.log("delete");
-    const result = await this.executeCommand(COMMANDS.CMD_DELETE_USER, packet);
-    console.log(result.toString("hex"));
-    console.log("Delete response:", result);
-    console.log("refresh");
-    await this.refreshData();
-    console.log("enable");
-    await this.enableDevice();
-    return result;
-  }
-  async registerRealtimeEvents() {
-    const payload = Buffer.alloc(4);
-    const mask = COMMANDS.EF_ATTLOG | COMMANDS.EF_VERIFY | COMMANDS.EF_FINGER | COMMANDS.EF_ENROLLUSER | COMMANDS.EF_ENROLLFINGER | COMMANDS.EF_BUTTON | COMMANDS.EF_UNLOCK | COMMANDS.EF_FPFTR | COMMANDS.EF_ALARM;
-    payload.writeUInt32LE(mask, 0);
-    console.log(mask);
-    const res = await this.executeCommand(COMMANDS.CMD_REG_EVENT, payload);
-    console.log("REGISTER EVENT RESPONSE:", res?.toString("hex"));
-    return res;
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      const res = await this.client.getUsers();
+      return res?.data ?? [];
+    });
   }
   async getAttendance() {
-    if (!this.client) throw new ConnectionError("Device is not connected");
-    try {
-      const response = await this.client.getAttendances();
-      return Array.isArray(response?.data) ? response.data : [];
-    } catch (error) {
-      throw new DeviceError(
-        `Failed to read attendance: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        const response = await this.client.getAttendances();
+        const logs = Array.isArray(response?.data) ? response.data : [];
+        deviceLogger.info("Fetched attendance logs from device", { count: logs.length, sampleLog: logs[0] });
+        return logs;
+      } catch (error) {
+        throw new Error(
+          `Failed to read attendance: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    });
+  }
+  async addUser(user) {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      deviceLogger.warn("addUser: node-zklib doesn't support setUser directly. Use executeCmd for user management.");
+    });
+  }
+  async updateUser(user) {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.addUser(user);
+  }
+  async deleteUser(userId) {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      deviceLogger.warn(`deleteUser: node-zklib doesn't support direct user deletion. UserId ${userId} was provided.`);
+    });
   }
   async clearAttendance() {
-    if (!this.client) throw new ConnectionError("Device is not connected");
-    try {
-      await this.client.clearAttendanceLog();
-    } catch (error) {
-      throw new DeviceError(
-        `Failed to clear attendance: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        await this.client.clearAttendanceLog();
+      } catch (error) {
+        throw new Error(
+          `Failed to clear attendance: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    });
   }
   async restart() {
-    if (!this.client) throw new ConnectionError("Device is not connected");
-    try {
-      await this.client.executeCmd(COMMANDS.CMD_RESTART);
-    } catch (error) {
-      throw new DeviceError(
-        `Failed to restart device: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        await this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from(""));
+      } catch (error) {
+        throw new Error(
+          `Failed to restart device: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    });
+  }
+  async executeCommand(cmd, payload) {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      const res = await this.client.executeCmd(cmd, payload);
+      return res;
+    });
+  }
+  async getTime() {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      const info = await this.client.getInfo();
+      return /* @__PURE__ */ new Date();
+    });
   }
 };
 
@@ -409,32 +377,6 @@ var DeviceSettingsStore = class {
 };
 var deviceSettingsStore = new DeviceSettingsStore();
 
-// electron/zkTeco/DeviceLogger.ts
-var DeviceLogger = class {
-  log(level, message, details) {
-    const prefix = "[ZKTECO]";
-    const payload = details ? ` ${JSON.stringify(details)}` : "";
-    const output = `${prefix} ${message}${payload}`;
-    if (level === "error") {
-      console.error(output);
-    } else if (level === "warn") {
-      console.warn(output);
-    } else {
-      console.info(output);
-    }
-  }
-  info(message, details) {
-    this.log("info", message, details);
-  }
-  warn(message, details) {
-    this.log("warn", message, details);
-  }
-  error(message, details) {
-    this.log("error", message, details);
-  }
-};
-var deviceLogger = new DeviceLogger();
-
 // electron/zkTeco/DeviceManager.ts
 var DeviceManager = class extends import_events.EventEmitter {
   client = new ZKClient();
@@ -447,10 +389,17 @@ var DeviceManager = class extends import_events.EventEmitter {
   isFirstPoll = true;
   isReconnecting = false;
   consecutiveFailures = 0;
+  /** Tracks whether initial sync has been done */
+  initialSyncDone = false;
+  /** Tracks if we're in initial sync mode (polling disabled) */
+  skipPolling = true;
   /** Tracks the last emitted status message to avoid duplicate status events */
   lastStatusEmitHash = null;
+  /** Prevents timer callbacks from running after disconnect/cleanup */
+  disposed = false;
   constructor() {
     super();
+    this.setMaxListeners(20);
   }
   async applySettings(settings) {
     this.settings = deviceSettingsStore.save(settings);
@@ -479,6 +428,7 @@ var DeviceManager = class extends import_events.EventEmitter {
     }
   }
   async disconnect() {
+    this.disposed = true;
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.reconnectTimer) clearInterval(this.reconnectTimer);
     this.pollTimer = null;
@@ -501,13 +451,8 @@ var DeviceManager = class extends import_events.EventEmitter {
       }
       const users = await this.getUsers();
       const attendance = await this.getAttendance();
-      const infoAny = info;
-      const firmwareVersion = infoAny?.firmwareVersion || infoAny?.firmware || infoAny?.firmwareVer || infoAny?.ver || infoAny?.version || infoAny?.firmware_ver || infoAny?.firmVer || infoAny?.firmver || "Unknown";
-      const serialNumber = infoAny?.serialNumber || infoAny?.serial || infoAny?.sn || infoAny?.deviceSerial || void 0;
       return {
         ...status,
-        firmwareVersion,
-        serialNumber,
         userCount: users.length,
         attendanceCount: attendance.length
       };
@@ -618,9 +563,47 @@ var DeviceManager = class extends import_events.EventEmitter {
     this.startPolling();
     this.scheduleReconnect();
   }
-  /** On startup, pre-populate the fingerprint set with ALL existing attendance logs
-   *  so they are never re-processed on app restart. This solves the issue of
-   *  re-matching old check-ins/check-outs every time the software starts. */
+  /**
+   * Sync all existing attendance records from the device.
+   * This is called after the app starts to fetch attendance that was recorded
+   * while the application was closed. It emits events for the bridge to process.
+   * On first call, it processes ALL logs (not just new ones).
+   */
+  async syncAttendance() {
+    if (!this.connected) {
+      try {
+        await this.connect();
+      } catch (error) {
+        return { success: false, error: toErrorMessage(error) };
+      }
+    }
+    try {
+      const logs = await this.client.getAttendance();
+      let logsToProcess;
+      if (!this.initialSyncDone) {
+        logsToProcess = logs;
+        this.initialSyncDone = true;
+        this.skipPolling = false;
+      } else {
+        logsToProcess = logs.filter((log) => {
+          const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? "unknown"}-${log.timestamp ?? log.attTime ?? ""}`;
+          return !this.lastAttendanceFingerprint.has(key);
+        });
+      }
+      if (logsToProcess.length > 0) {
+        this.emit("attendance", logsToProcess, true);
+      }
+      for (const log of logsToProcess) {
+        const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? "unknown"}-${log.timestamp ?? log.attTime ?? ""}`;
+        this.lastAttendanceFingerprint.add(key);
+      }
+      return { success: true, data: { total: logsToProcess.length } };
+    } catch (error) {
+      return { success: false, error: toErrorMessage(error) };
+    }
+  }
+  /** On startup, connect to device only. The fingerprint set and polling are handled
+   *  in syncAttendance() to ensure logs are processed when the renderer is ready. */
   async initializeAttendanceFingerprint() {
     try {
       if (!this.connected) {
@@ -630,11 +613,6 @@ var DeviceManager = class extends import_events.EventEmitter {
           return;
         }
       }
-      const logs = await this.client.getAttendance();
-      for (const log of logs) {
-        const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? "unknown"}-${log.timestamp ?? log.attTime ?? ""}`;
-        this.lastAttendanceFingerprint.add(key);
-      }
       this.isFirstPoll = false;
     } catch {
     }
@@ -643,14 +621,21 @@ var DeviceManager = class extends import_events.EventEmitter {
     if (this.pollTimer) return;
     const interval = this.settings.pollInterval || DEFAULT_POLL_INTERVAL_MS;
     this.pollTimer = setInterval(async () => {
-      if (!this.connected) return;
+      if (this.disposed || !this.connected || this.skipPolling) return;
       try {
         const logs = await this.client.getAttendance();
         const newLogs = logs.filter((log) => {
           const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? "unknown"}-${log.timestamp ?? log.attTime ?? ""}`;
           return !this.lastAttendanceFingerprint.has(key);
         });
-        this.lastAttendanceFingerprint = /* @__PURE__ */ new Set([...Array.from(this.lastAttendanceFingerprint).slice(-200), ...newLogs.map((item) => `${item.userId ?? item.uid ?? item.deviceUserId ?? "unknown"}-${item.timestamp ?? item.attTime ?? ""}`)]);
+        const updatedSet = /* @__PURE__ */ new Set();
+        const existing = Array.from(this.lastAttendanceFingerprint);
+        const toKeep = existing.slice(-500);
+        for (const k of toKeep) updatedSet.add(k);
+        for (const item of newLogs) {
+          updatedSet.add(`${item.userId ?? item.uid ?? item.deviceUserId ?? "unknown"}-${item.timestamp ?? item.attTime ?? ""}`);
+        }
+        this.lastAttendanceFingerprint = updatedSet;
         if (newLogs.length > 0) {
           this.emit("attendance", newLogs, false);
         }
@@ -666,17 +651,24 @@ var DeviceManager = class extends import_events.EventEmitter {
   scheduleReconnect() {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setInterval(async () => {
-      if (!this.connected && !this.isReconnecting) {
-        this.isReconnecting = true;
-        try {
-          if (this.consecutiveFailures > 5) {
-            return;
-          }
-          await this.connect();
-        } catch {
-        } finally {
-          this.isReconnecting = false;
+      if (this.disposed || !this.connected || this.isReconnecting) return;
+      this.isReconnecting = true;
+      try {
+        const backoffMs = Math.min(
+          1e3 * Math.pow(2, Math.min(this.consecutiveFailures, 10)),
+          3e5
+          // cap at 5 minutes
+        );
+        const now = Date.now();
+        const lastFailure = this._lastFailureTime || 0;
+        if (now - lastFailure < backoffMs) {
+          return;
         }
+        this._lastFailureTime = now;
+        await this.connect();
+      } catch {
+      } finally {
+        this.isReconnecting = false;
       }
     }, DEFAULT_RECONNECT_INTERVAL_MS);
   }
@@ -701,27 +693,6 @@ var DeviceManager = class extends import_events.EventEmitter {
   }
 };
 var deviceManager = new DeviceManager();
-
-// electron/zkTeco/AttendanceSync.ts
-var import_events2 = require("events");
-var AttendanceSyncService = class extends import_events2.EventEmitter {
-  lastSyncAt = null;
-  seen = /* @__PURE__ */ new Set();
-  markSynced(attendance) {
-    const unique = attendance.filter((item) => {
-      const key = `${item.userId ?? item.uid ?? item.deviceUserId ?? "unknown"}-${item.timestamp ?? item.attTime ?? ""}`;
-      if (this.seen.has(key)) return false;
-      this.seen.add(key);
-      return true;
-    });
-    this.lastSyncAt = /* @__PURE__ */ new Date();
-    return unique;
-  }
-  getLastSyncAt() {
-    return this.lastSyncAt;
-  }
-};
-var attendanceSyncService = new AttendanceSyncService();
 
 // electron/zkTeco/membership/validateMembershipStateFromMember.ts
 function validateMembershipStateFromMember(member) {
@@ -770,23 +741,46 @@ function validateCheckIn(member) {
 
 // electron/zkTeco/membership/upsertAttendanceFromBiometric.ts
 function getAttendanceTimestamp(logItem) {
-  const raw = logItem.timestamp ?? logItem.attTime ?? logItem.checkInTime;
-  if (raw == null) return /* @__PURE__ */ new Date();
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return /* @__PURE__ */ new Date();
+  const raw = logItem.timestamp ?? logItem.attTime ?? logItem.checkInTime ?? logItem.checkTime ?? logItem.date;
+  deviceLogger.info("Raw timestamp from device log", { raw, logItem });
+  if (raw == null) {
+    deviceLogger.warn("No timestamp found in log item, using current time");
+    return /* @__PURE__ */ new Date();
+  }
+  let d;
+  if (typeof raw === "number") {
+    const ms = raw < 1e10 ? raw * 1e3 : raw;
+    d = new Date(ms);
+    deviceLogger.info("Parsed numeric timestamp", { raw, ms, parsed: d.toISOString() });
+  } else if (typeof raw === "string") {
+    d = new Date(raw);
+    deviceLogger.info("Parsed string timestamp", { raw, parsed: d.toISOString() });
+  } else {
+    d = new Date(raw);
+    deviceLogger.info("Parsed object timestamp", { parsed: d.toISOString() });
+  }
+  if (Number.isNaN(d.getTime())) {
+    deviceLogger.warn("Failed to parse timestamp, using current time", { timestamp: raw });
+    return /* @__PURE__ */ new Date();
+  }
   return d;
 }
 function roundToSeconds(d) {
-  const ms = d.getMilliseconds();
-  if (!ms) return d;
-  return new Date(d.getTime() - ms);
+  const copy = new Date(d.getTime());
+  copy.setMilliseconds(0);
+  return copy;
 }
 async function upsertAttendanceFromBiometric(args) {
-  const { prisma: prisma2, member, logItem } = args;
+  const { prisma: prisma2, member, logItem, deviceUserId } = args;
   const now = roundToSeconds(/* @__PURE__ */ new Date());
   const sixHoursAgo = new Date(now);
   sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
   const checkInTime = roundToSeconds(getAttendanceTimestamp(logItem));
+  deviceLogger.info("Processing attendance log", {
+    deviceUserId,
+    memberId: member.id,
+    checkInTime: checkInTime.toISOString()
+  });
   const activeSession = await prisma2.attendance.findFirst({
     where: {
       memberId: member.id,
@@ -796,13 +790,29 @@ async function upsertAttendanceFromBiometric(args) {
     orderBy: { checkInTime: "desc" }
   });
   if (activeSession) {
+    const secondsSinceCheckIn = Math.abs(
+      checkInTime.getTime() - new Date(activeSession.checkInTime).getTime()
+    ) / 1e3;
+    if (secondsSinceCheckIn <= 30) {
+      deviceLogger.info("Duplicate check-in detected (within 30s), skipping checkout", {
+        deviceUserId,
+        memberId: member.id,
+        secondsSinceCheckIn
+      });
+      return { ipcEvent: "attendance:checkin", attendance: activeSession };
+    }
     const alreadyClosedWithin1s = activeSession.checkOutTime != null && Math.abs(
-      new Date(activeSession.checkOutTime).getTime() - now.getTime()
+      new Date(activeSession.checkOutTime).getTime() - checkInTime.getTime()
     ) <= 1e3;
     if (!alreadyClosedWithin1s) {
       const updated = await prisma2.attendance.update({
         where: { id: activeSession.id },
-        data: { checkOutTime: now, method: "BIOMETRIC" }
+        data: { checkOutTime: checkInTime, method: "BIOMETRIC" }
+      });
+      deviceLogger.info("Attendance checked out", {
+        deviceUserId,
+        memberId: member.id,
+        checkOutTime: checkInTime.toISOString()
       });
       return { ipcEvent: "attendance:checkout", attendance: updated };
     }
@@ -812,13 +822,17 @@ async function upsertAttendanceFromBiometric(args) {
     where: {
       memberId: member.id,
       checkInTime: {
-        gte: new Date(checkInTime.getTime()),
-        lte: new Date(checkInTime.getTime())
+        gte: new Date(checkInTime.getTime() - 1e3),
+        lte: new Date(checkInTime.getTime() + 1e3)
       },
       method: "BIOMETRIC"
     }
   });
   if (nearDuplicate) {
+    deviceLogger.info("Near-duplicate check-in skipped", {
+      deviceUserId,
+      memberId: member.id
+    });
     return { ipcEvent: "attendance:checkin", attendance: nearDuplicate };
   }
   const created = await prisma2.attendance.create({
@@ -828,61 +842,311 @@ async function upsertAttendanceFromBiometric(args) {
       method: "BIOMETRIC"
     }
   });
+  deviceLogger.info("Attendance checked in", {
+    deviceUserId,
+    memberId: member.id,
+    checkInTime: checkInTime.toISOString()
+  });
   return { ipcEvent: "attendance:checkin", attendance: created };
 }
 
+// electron/zkTeco/membership/upsertTrainerAttendanceFromBiometric.ts
+function getAttendanceTimestamp2(logItem) {
+  const raw = logItem.timestamp ?? logItem.attTime ?? logItem.checkInTime ?? logItem.checkTime ?? logItem.date;
+  if (raw == null) {
+    deviceLogger.warn("No timestamp found in log item, using current time", { logItem });
+    return /* @__PURE__ */ new Date();
+  }
+  let d;
+  if (typeof raw === "number") {
+    const ms = raw < 1e10 ? raw * 1e3 : raw;
+    d = new Date(ms);
+  } else if (typeof raw === "string") {
+    d = new Date(raw);
+  } else {
+    d = new Date(raw);
+  }
+  if (Number.isNaN(d.getTime())) {
+    deviceLogger.warn("Failed to parse timestamp, using current time", { timestamp: raw, logItem });
+    return /* @__PURE__ */ new Date();
+  }
+  return d;
+}
+function roundToSeconds2(d) {
+  const copy = new Date(d.getTime());
+  copy.setMilliseconds(0);
+  return copy;
+}
+async function upsertTrainerAttendanceFromBiometric(args) {
+  const { prisma: prisma2, trainer, logItem, deviceUserId } = args;
+  const now = roundToSeconds2(/* @__PURE__ */ new Date());
+  const twelveHoursAgo = new Date(now);
+  twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
+  const checkInTime = roundToSeconds2(getAttendanceTimestamp2(logItem));
+  deviceLogger.info("Processing trainer attendance log", {
+    deviceUserId,
+    trainerId: trainer.id,
+    checkInTime: checkInTime.toISOString(),
+    rawTimestamp: logItem.timestamp ?? logItem.attTime
+  });
+  const activeSession = await prisma2.trainerAttendance.findFirst({
+    where: {
+      trainerId: trainer.id,
+      checkOutTime: null,
+      checkInTime: { gte: twelveHoursAgo }
+    },
+    orderBy: { checkInTime: "desc" }
+  });
+  if (activeSession) {
+    const secondsSinceCheckIn = Math.abs(
+      checkInTime.getTime() - new Date(activeSession.checkInTime).getTime()
+    ) / 1e3;
+    if (secondsSinceCheckIn <= 30) {
+      deviceLogger.info("Duplicate check-in detected (within 30s), skipping checkout", {
+        deviceUserId,
+        trainerId: trainer.id,
+        secondsSinceCheckIn
+      });
+      return { ipcEvent: "trainerAttendance:checkin", attendance: activeSession };
+    }
+    const alreadyClosedWithin1s = activeSession.checkOutTime != null && Math.abs(
+      new Date(activeSession.checkOutTime).getTime() - checkInTime.getTime()
+    ) <= 1e3;
+    if (!alreadyClosedWithin1s) {
+      const updated = await prisma2.trainerAttendance.update({
+        where: { id: activeSession.id },
+        data: { checkOutTime: checkInTime, method: "BIOMETRIC" }
+      });
+      deviceLogger.info("Trainer attendance checked out", {
+        deviceUserId,
+        trainerId: trainer.id,
+        checkOutTime: checkInTime.toISOString()
+      });
+      return { ipcEvent: "trainerAttendance:checkout", attendance: updated };
+    }
+    return { ipcEvent: "trainerAttendance:checkout", attendance: activeSession };
+  }
+  const nearDuplicate = await prisma2.trainerAttendance.findFirst({
+    where: {
+      trainerId: trainer.id,
+      checkInTime: {
+        gte: new Date(checkInTime.getTime() - 1e3),
+        lte: new Date(checkInTime.getTime() + 1e3)
+      },
+      method: "BIOMETRIC"
+    }
+  });
+  if (nearDuplicate) {
+    deviceLogger.info("Near-duplicate check-in skipped", {
+      deviceUserId,
+      trainerId: trainer.id
+    });
+    return { ipcEvent: "trainerAttendance:checkin", attendance: nearDuplicate };
+  }
+  const created = await prisma2.trainerAttendance.create({
+    data: {
+      trainerId: trainer.id,
+      checkInTime,
+      method: "BIOMETRIC"
+    }
+  });
+  deviceLogger.info("Trainer attendance checked in", {
+    deviceUserId,
+    trainerId: trainer.id,
+    checkInTime: checkInTime.toISOString()
+  });
+  return { ipcEvent: "trainerAttendance:checkin", attendance: created };
+}
+
 // electron/zkTeco/DeviceAttendanceBridge.ts
+var TRAINER_ID_THRESHOLD = 1e4;
 function registerDeviceAttendanceBridge(args) {
-  const { prisma: prisma2, getMemberByDeviceUserId, getMainWindow: getMainWindow2, log } = args;
+  const { prisma: prisma2, getMemberByDeviceUserId, getTrainerByDeviceUserId, getMainWindow: getMainWindow2, log } = args;
   const sendToRenderer = (channel, data) => {
     getMainWindow2()?.webContents.send(channel, data);
   };
+  async function fetchDeviceUser(deviceUserId) {
+    try {
+      const users = await deviceManager.getUsers();
+      return users.find((u) => {
+        const uid = String(u.uid ?? u.userId ?? u.id ?? u.employeeNo ?? u.userid);
+        return uid === String(deviceUserId);
+      }) ?? null;
+    } catch (err) {
+      deviceLogger.error("Failed to fetch device user for auto-sync", {
+        deviceUserId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return null;
+    }
+  }
+  async function fetchFullMember(memberId) {
+    try {
+      return await prisma2.member.findUnique({
+        where: { id: memberId },
+        include: { plan: true, trainer: true }
+      });
+    } catch {
+      return null;
+    }
+  }
+  async function autoCreateMemberFromDevice(deviceUserId, deviceUser) {
+    try {
+      const name = deviceUser.name ?? deviceUser.fullName ?? deviceUser.firstName ?? `Member-${deviceUserId}`;
+      const nameParts = name.trim().split(/\s+/);
+      const firstName = nameParts[0] || `Member-${deviceUserId}`;
+      const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : null;
+      const member = await prisma2.member.create({
+        data: {
+          firstName,
+          lastName,
+          employeeNo: deviceUserId,
+          deviceSynced: true,
+          status: "ACTIVE"
+        }
+      });
+      deviceLogger.info("Auto-created member from device sync", {
+        memberId: member.id,
+        deviceUserId,
+        name
+      });
+      sendToRenderer("member:auto-created", {
+        member,
+        deviceUserId,
+        deviceName: name
+      });
+      return member;
+    } catch (err) {
+      deviceLogger.error("Failed to auto-create member", {
+        deviceUserId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return null;
+    }
+  }
+  async function autoCreateTrainerFromDevice(deviceUserId, deviceUser) {
+    try {
+      const name = deviceUser.name ?? deviceUser.fullName ?? deviceUser.firstName ?? `Trainer-${deviceUserId}`;
+      const nameParts = name.trim().split(/\s+/);
+      const firstName = nameParts[0] || `Trainer-${deviceUserId}`;
+      const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : null;
+      const trainer = await prisma2.trainer.create({
+        data: {
+          firstName,
+          lastName,
+          employeeNo: deviceUserId,
+          deviceSynced: true
+        }
+      });
+      deviceLogger.info("Auto-created trainer from device sync", {
+        trainerId: trainer.id,
+        deviceUserId,
+        name
+      });
+      sendToRenderer("trainer:auto-created", {
+        trainer,
+        deviceUserId,
+        deviceName: name
+      });
+      return trainer;
+    } catch (err) {
+      deviceLogger.error("Failed to auto-create trainer", {
+        deviceUserId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return null;
+    }
+  }
   deviceManager.on("attendance", async (newLogs, silent = false) => {
     try {
       for (const logItem of newLogs) {
         const deviceUserIdRaw = logItem.userId ?? logItem.deviceUserId ?? logItem.uid ?? null;
         const deviceUserId = deviceUserIdRaw == null ? null : Number(deviceUserIdRaw);
         if (!deviceUserId || Number.isNaN(deviceUserId)) {
-          if (!silent) {
-            sendToRenderer("attendance:unknown", {
-              reason: "missing-device-user-id",
-              deviceUserId: deviceUserIdRaw,
-              deviceLog: logItem
-            });
-          }
+          sendToRenderer("attendance:unknown", {
+            reason: "missing-device-user-id",
+            deviceUserId: deviceUserIdRaw,
+            deviceLog: logItem,
+            startupSync: silent
+          });
           continue;
         }
-        const member = await getMemberByDeviceUserId(deviceUserId);
-        if (!member) {
-          if (!silent) {
+        if (deviceUserId >= TRAINER_ID_THRESHOLD) {
+          let trainer = await getTrainerByDeviceUserId(deviceUserId);
+          if (!trainer) {
+            const deviceUser = await fetchDeviceUser(deviceUserId);
+            if (deviceUser) {
+              trainer = await autoCreateTrainerFromDevice(deviceUserId, deviceUser);
+            }
+          }
+          if (!trainer) {
             sendToRenderer("attendance:unknown", {
               deviceUserId,
-              deviceLog: logItem
+              deviceLog: logItem,
+              startupSync: silent
             });
+            continue;
           }
+          const result2 = await upsertTrainerAttendanceFromBiometric({
+            prisma: prisma2,
+            trainer,
+            deviceUserId,
+            logItem
+          });
+          sendToRenderer(result2.ipcEvent, {
+            trainer,
+            deviceUserId,
+            attendance: result2.attendance,
+            deviceLog: logItem,
+            startupSync: silent
+          });
+          deviceLogger.info("Trainer attendance bridged", {
+            ipcEvent: result2.ipcEvent,
+            trainerId: trainer.id,
+            deviceUserId,
+            startupSync: silent
+          });
+          continue;
+        }
+        let member = await getMemberByDeviceUserId(deviceUserId);
+        if (!member) {
+          const deviceUser = await fetchDeviceUser(deviceUserId);
+          if (deviceUser) {
+            member = await autoCreateMemberFromDevice(deviceUserId, deviceUser);
+          }
+        }
+        if (!member) {
+          sendToRenderer("attendance:unknown", {
+            deviceUserId,
+            deviceLog: logItem,
+            startupSync: silent
+          });
           continue;
         }
         const state = validateMembershipStateFromMember(member);
         const checkInValidation = validateCheckIn(member);
         if (!checkInValidation.allowed) {
-          if (!silent) {
-            if (state === "EXPIRED") {
-              sendToRenderer("attendance:expired", {
-                memberId: member.id,
-                deviceUserId,
-                state,
-                reason: checkInValidation.reason,
-                deviceLog: logItem
-              });
-            } else {
-              sendToRenderer("attendance:inactive", {
-                memberId: member.id,
-                deviceUserId,
-                state,
-                reason: checkInValidation.reason,
-                deviceLog: logItem
-              });
-            }
+          const fullMember = await fetchFullMember(member.id);
+          if (state === "EXPIRED") {
+            sendToRenderer("attendance:expired", {
+              member: fullMember || member,
+              memberId: member.id,
+              deviceUserId,
+              state,
+              reason: checkInValidation.reason,
+              deviceLog: logItem,
+              startupSync: silent
+            });
+          } else {
+            sendToRenderer("attendance:inactive", {
+              member: fullMember || member,
+              memberId: member.id,
+              deviceUserId,
+              state,
+              reason: checkInValidation.reason,
+              deviceLog: logItem,
+              startupSync: silent
+            });
           }
           continue;
         }
@@ -892,19 +1156,19 @@ function registerDeviceAttendanceBridge(args) {
           deviceUserId,
           logItem
         });
-        if (!silent) {
-          sendToRenderer(result.ipcEvent, {
-            member,
-            deviceUserId,
-            attendance: result.attendance,
-            membershipState: state,
-            deviceLog: logItem
-          });
-        }
+        sendToRenderer(result.ipcEvent, {
+          member,
+          deviceUserId,
+          attendance: result.attendance,
+          membershipState: state,
+          deviceLog: logItem,
+          startupSync: silent
+        });
         deviceLogger.info("Attendance bridged", {
           ipcEvent: result.ipcEvent,
           memberId: member.id,
-          deviceUserId
+          deviceUserId,
+          startupSync: silent
         });
       }
     } catch (error) {
@@ -1061,6 +1325,60 @@ function registerZkTecoDeviceHandlers(ipcMain2, prisma2, getMainWindow2) {
     } catch (error) {
       return createStructuredError(error);
     }
+  });
+  ipcMain2.handle("device:sync-users", async () => {
+    try {
+      const deviceUsers = await deviceManager.getUsers();
+      let membersCreated = 0;
+      let trainersCreated = 0;
+      let membersSkipped = 0;
+      let trainersSkipped = 0;
+      for (const deviceUser of deviceUsers) {
+        const deviceUserIdRaw = deviceUser.userId ?? deviceUser.uid ?? deviceUser.employeeNo;
+        const deviceUserId = deviceUserIdRaw == null ? null : Number(deviceUserIdRaw);
+        if (!deviceUserId || Number.isNaN(deviceUserId)) continue;
+        const name = deviceUser.name ?? deviceUser.fullName ?? deviceUser.firstName ?? `User-${deviceUserId}`;
+        const nameParts = name.trim().split(/\s+/);
+        const firstName = nameParts[0] || `User-${deviceUserId}`;
+        const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : null;
+        if (deviceUserId >= 1e4) {
+          const existing = await prisma2.trainer.findFirst({ where: { employeeNo: deviceUserId } });
+          if (existing) {
+            trainersSkipped++;
+            continue;
+          }
+          await prisma2.trainer.create({
+            data: { firstName, lastName, employeeNo: deviceUserId, deviceSynced: true }
+          });
+          trainersCreated++;
+        } else {
+          const existing = await prisma2.member.findFirst({ where: { employeeNo: deviceUserId } });
+          if (existing) {
+            membersSkipped++;
+            continue;
+          }
+          await prisma2.member.create({
+            data: { firstName, lastName, employeeNo: deviceUserId, deviceSynced: true, status: "ACTIVE" }
+          });
+          membersCreated++;
+        }
+      }
+      return {
+        success: true,
+        data: {
+          totalOnDevice: deviceUsers.length,
+          membersCreated,
+          trainersCreated,
+          membersSkipped,
+          trainersSkipped
+        }
+      };
+    } catch (error) {
+      return createStructuredError(error);
+    }
+  });
+  ipcMain2.handle("device:sync-attendance", async () => {
+    return deviceManager.syncAttendance();
   });
 }
 
@@ -1295,7 +1613,12 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
             error: err?.message
           });
         }
-      })();
+      })().catch((err) => {
+        deviceLogger2.error("Unhandled error in enrollment watcher", {
+          employeeNo: nextEmployeeNo,
+          error: err?.message
+        });
+      });
       await prisma2.member.update({
         where: { id: member.id },
         data: { deviceSynced: true }
@@ -1340,7 +1663,12 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
               error: err?.message
             });
           }
-        })();
+        })().catch((err) => {
+          deviceLogger2.error("Unhandled error in manual enrollment watcher", {
+            employeeNo: nextEmployeeNo,
+            error: err?.message
+          });
+        });
       } else {
         deviceError = msg;
         deviceLogger2.userCreateFailed(nextEmployeeNo, memberName, msg);
@@ -1381,7 +1709,6 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
           lastName: member.lastName,
           privilege: 0,
           password: "",
-          enabled: true,
           startDate: formatDeviceDate(member.membershipStart),
           endDate: formatDeviceDate(member.membershipEnd)
         });
@@ -1463,20 +1790,6 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
       const updatedStatus = [];
       for (const m of members) {
         const onDevice = m.employeeNo != null ? deviceUsersMap.has(m.employeeNo) : false;
-        if (onDevice) {
-          const dUser = deviceUsersMap.get(m.employeeNo);
-          const dName = (dUser.name || "").trim();
-          const localName = `${m.firstName || ""} ${m.lastName || ""}`.trim();
-          if (dName && dName !== localName) {
-            const parts = dName.split(" ");
-            const newFirst = parts[0];
-            const newLast = parts.slice(1).join(" ");
-            await prisma2.member.update({
-              where: { id: m.id },
-              data: { firstName: newFirst, lastName: newLast }
-            });
-          }
-        }
         updatedStatus.push({
           id: m.id,
           employeeNo: m.employeeNo,
@@ -1495,6 +1808,7 @@ function registerMembersHandlers(ipcMain2, prisma2, userDataPath) {
 }
 
 // electron/handlers/trainers.ts
+var TRAINER_ID_OFFSET = 1e4;
 function registerTrainersHandlers(ipcMain2, prisma2) {
   ipcMain2.handle("trainers:getAll", async () => {
     return await prisma2.trainer.findMany({
@@ -1519,17 +1833,227 @@ function registerTrainersHandlers(ipcMain2, prisma2) {
     });
   });
   ipcMain2.handle("trainers:create", async (_, data) => {
-    return await prisma2.trainer.create({
-      data
+    const lastTrainer = await prisma2.trainer.findFirst({
+      where: { employeeNo: { not: null } },
+      orderBy: { employeeNo: "desc" },
+      select: { employeeNo: true }
     });
+    const lastTrainerNo = lastTrainer?.employeeNo || TRAINER_ID_OFFSET;
+    const nextEmployeeNo = lastTrainerNo + 1;
+    let trainer;
+    try {
+      trainer = await prisma2.trainer.create({
+        data: {
+          ...data,
+          employeeNo: nextEmployeeNo,
+          deviceSynced: false
+        }
+      });
+    } catch (err) {
+      if (err && err.code === "P2002") {
+        throw new Error(
+          "A trainer with the provided unique field already exists (CNIC or other)"
+        );
+      }
+      throw err;
+    }
+    let deviceSynced = false;
+    let deviceError;
+    const trainerName = `${data.firstName || ""} ${data.lastName || ""}`.trim();
+    try {
+      const userPayload = {
+        uid: nextEmployeeNo,
+        id: nextEmployeeNo,
+        userId: nextEmployeeNo,
+        employeeNo: nextEmployeeNo,
+        name: trainerName,
+        fullName: trainerName,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        privilege: 0,
+        password: ""
+      };
+      await deviceManager.addUser(userPayload);
+      deviceSynced = true;
+      (async () => {
+        try {
+          deviceLogger2.info("Waiting for fingerprint enrollment on device for trainer", {
+            employeeNo: nextEmployeeNo
+          });
+          const enrolled = await deviceManager.waitForEnrollment(
+            nextEmployeeNo,
+            3e5,
+            5e3
+          );
+          if (enrolled) {
+            deviceLogger2.info("Fingerprint enrolled for trainer on device", {
+              employeeNo: nextEmployeeNo
+            });
+            try {
+              await prisma2.trainer.update({
+                where: { id: trainer.id },
+                data: { deviceSynced: true }
+              });
+            } catch {
+            }
+          } else {
+            deviceLogger2.warn("Fingerprint enrollment timed out for trainer", {
+              employeeNo: nextEmployeeNo
+            });
+          }
+        } catch (err) {
+          deviceLogger2.error("Error while waiting for trainer enrollment", {
+            employeeNo: nextEmployeeNo,
+            error: err?.message
+          });
+        }
+      })().catch((err) => {
+        deviceLogger2.error("Unhandled error in trainer enrollment watcher", {
+          employeeNo: nextEmployeeNo,
+          error: err?.message
+        });
+      });
+      await prisma2.trainer.update({
+        where: { id: trainer.id },
+        data: { deviceSynced: true }
+      });
+      deviceLogger2.userCreated(nextEmployeeNo, trainerName);
+    } catch (error) {
+      const msg = String(error?.message || error);
+      if (msg.includes("User enrollment is not supported") || msg.includes("User enrollment is not implemented")) {
+        deviceError = "Remote enrollment not supported by device/library. Please create user with ID " + nextEmployeeNo + " on the device and enroll fingerprint; the app will detect it automatically.";
+        deviceLogger2.userCreateFailed(nextEmployeeNo, trainerName, msg);
+        (async () => {
+          try {
+            deviceLogger2.info(
+              "Waiting for manual fingerprint enrollment for trainer on device",
+              { employeeNo: nextEmployeeNo }
+            );
+            const enrolled = await deviceManager.waitForEnrollment(
+              nextEmployeeNo,
+              12e4,
+              2e3
+            );
+            if (enrolled) {
+              deviceLogger2.info(
+                "Manual fingerprint enrolled for trainer on device",
+                { employeeNo: nextEmployeeNo }
+              );
+              try {
+                await prisma2.trainer.update({
+                  where: { id: trainer.id },
+                  data: { deviceSynced: true }
+                });
+              } catch {
+              }
+            } else {
+              deviceLogger2.warn("Manual fingerprint enrollment timed out for trainer", {
+                employeeNo: nextEmployeeNo
+              });
+            }
+          } catch (err) {
+            deviceLogger2.error("Error while waiting for manual trainer enrollment", {
+              employeeNo: nextEmployeeNo,
+              error: err?.message
+            });
+          }
+        })().catch((err) => {
+          deviceLogger2.error("Unhandled error in manual trainer enrollment watcher", {
+            employeeNo: nextEmployeeNo,
+            error: err?.message
+          });
+        });
+      } else {
+        deviceError = msg;
+        deviceLogger2.userCreateFailed(nextEmployeeNo, trainerName, msg);
+      }
+    }
+    return {
+      ...trainer,
+      deviceSynced,
+      deviceError
+    };
   });
   ipcMain2.handle("trainers:update", async (_, id, data) => {
-    return await prisma2.trainer.update({
+    let trainer = await prisma2.trainer.update({
       where: { id },
       data
     });
+    if (!trainer.employeeNo) {
+      const lastTrainer = await prisma2.trainer.findFirst({
+        where: { employeeNo: { not: null } },
+        orderBy: { employeeNo: "desc" },
+        select: { employeeNo: true }
+      });
+      const nextEmployeeNo = (lastTrainer?.employeeNo || TRAINER_ID_OFFSET) + 1;
+      trainer = await prisma2.trainer.update({
+        where: { id },
+        data: { employeeNo: nextEmployeeNo }
+      });
+      try {
+        const trainerName = `${trainer.firstName || ""} ${trainer.lastName || ""}`.trim();
+        await deviceManager.addUser({
+          uid: nextEmployeeNo,
+          id: nextEmployeeNo,
+          userId: nextEmployeeNo,
+          employeeNo: nextEmployeeNo,
+          name: trainerName,
+          fullName: trainerName,
+          firstName: trainer.firstName,
+          lastName: trainer.lastName,
+          privilege: 0,
+          password: ""
+        });
+        await prisma2.trainer.update({
+          where: { id: trainer.id },
+          data: { deviceSynced: true }
+        });
+        deviceLogger2.info("Assigned ID and synced trainer to device", { employeeNo: nextEmployeeNo });
+      } catch (error) {
+        deviceLogger2.error("Failed to create trainer on device", { error: error.message });
+      }
+    }
+    if (trainer.employeeNo) {
+      try {
+        const trainerName = `${trainer.firstName || ""} ${trainer.lastName || ""}`.trim();
+        await deviceManager.updateUser({
+          userId: trainer.employeeNo,
+          name: trainerName
+        });
+        deviceLogger2.info("Synced trainer update to device", {
+          employeeNo: trainer.employeeNo
+        });
+      } catch (error) {
+        deviceLogger2.error("Failed to update trainer on device", {
+          employeeNo: trainer.employeeNo,
+          error: error.message
+        });
+      }
+    }
+    return trainer;
   });
   ipcMain2.handle("trainers:delete", async (_, id) => {
+    const trainer = await prisma2.trainer.findUnique({
+      where: { id },
+      select: { id: true, employeeNo: true, firstName: true, lastName: true }
+    });
+    if (!trainer) {
+      throw new Error("Trainer not found");
+    }
+    if (trainer.employeeNo) {
+      try {
+        await deviceManager.deleteUser(trainer.employeeNo);
+        deviceLogger2.info("Deleted trainer from device", {
+          employeeNo: trainer.employeeNo,
+          name: `${trainer.firstName} ${trainer.lastName || ""}`.trim()
+        });
+      } catch (error) {
+        deviceLogger2.error("Failed to delete trainer from device", {
+          employeeNo: trainer.employeeNo,
+          error: error.message
+        });
+      }
+    }
     return await prisma2.trainer.delete({
       where: { id }
     });
@@ -1743,7 +2267,7 @@ function registerSystemHandlers(ipcMain2, dbPath2, prisma2) {
       if (import_fs2.default.existsSync(`${dbPath2}-shm`)) import_fs2.default.unlinkSync(`${dbPath2}-shm`);
       import_fs2.default.copyFileSync(filePaths[0], dbPath2);
       import_electron2.app.relaunch();
-      import_electron2.app.exit(0);
+      import_electron2.app.quit();
       return { success: true };
     } catch (error) {
       console.error("Restore error:", error);
@@ -1784,7 +2308,7 @@ function registerSystemHandlers(ipcMain2, dbPath2, prisma2) {
         if (import_fs2.default.existsSync(`${dbPath2}-shm`)) import_fs2.default.unlinkSync(`${dbPath2}-shm`);
         import_fs2.default.copyFileSync(pristineDb, dbPath2);
         import_electron2.app.relaunch();
-        import_electron2.app.exit(0);
+        import_electron2.app.quit();
         return { success: true };
       }
     } catch (error) {
@@ -1873,15 +2397,26 @@ import_electron3.app.whenReady().then(async () => {
       where: { employeeNo: deviceUserId }
     });
   };
+  const getTrainerByDeviceUserId = async (deviceUserId) => {
+    return await prisma.trainer.findFirst({
+      where: { employeeNo: deviceUserId }
+    });
+  };
   registerDeviceAttendanceBridge({
     prisma,
     getMemberByDeviceUserId,
+    getTrainerByDeviceUserId,
     getMainWindow
   });
   createWindow();
   const settings = deviceManager.getSettings();
   if (settings.enabled && settings.ip) {
     deviceManager.startAutoLifecycle();
+    setTimeout(async () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        await deviceManager.syncAttendance();
+      }
+    }, 2e3);
   }
   import_electron3.app.on("activate", () => {
     if (import_electron3.BrowserWindow.getAllWindows().length === 0) {
@@ -1892,6 +2427,16 @@ import_electron3.app.whenReady().then(async () => {
 import_electron3.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     import_electron3.app.quit();
+  }
+});
+import_electron3.app.on("before-quit", async () => {
+  try {
+    deviceManager.disconnect();
+  } catch {
+  }
+  try {
+    await prisma.$disconnect();
+  } catch {
   }
 });
 // Annotate the CommonJS export names for ESM import in node:

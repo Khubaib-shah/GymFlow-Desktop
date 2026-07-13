@@ -28,9 +28,9 @@ export default function Trainers() {
   const [trainers, setTrainers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [formData, setFormData] = useState<any>({ 
+  const [formData, setFormData] = useState<any>({
     firstName: '', lastName: '', specialty: '', phone: '',
-    cnic: '', dob: '', gender: '', address: '' 
+    cnic: '', dob: '', gender: '', address: ''
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -62,9 +62,9 @@ export default function Trainers() {
       });
       setEditingId(trainer.id);
     } else {
-      setFormData({ 
+      setFormData({
         firstName: '', lastName: '', specialty: '', phone: '',
-        cnic: '', dob: '', gender: '', address: '' 
+        cnic: '', dob: '', gender: '', address: ''
       });
       setEditingId(null);
     }
@@ -88,7 +88,7 @@ export default function Trainers() {
         return;
       }
     }
-    
+
     if (formData.cnic && formData.cnic.length !== 15) {
       setErrorMsg("Please enter a complete 13-digit CNIC.");
       return;
@@ -123,10 +123,10 @@ export default function Trainers() {
 
   const statusColor = (status: string) => {
     switch (status) {
-      case 'ACTIVE':    return 'bg-green-500/10 text-green-400 border border-green-500/20';
-      case 'EXPIRED':   return 'bg-red-500/10 text-red-400 border border-red-500/20';
+      case 'ACTIVE': return 'bg-green-500/10 text-green-400 border border-green-500/20';
+      case 'EXPIRED': return 'bg-red-500/10 text-red-400 border border-red-500/20';
       case 'SUSPENDED': return 'bg-orange-500/10 text-orange-400 border border-orange-500/20';
-      default:          return 'bg-gray-500/10 text-gray-400 border border-gray-500/20';
+      default: return 'bg-gray-500/10 text-gray-400 border border-gray-500/20';
     }
   };
 
@@ -164,9 +164,9 @@ export default function Trainers() {
               </div>
               <h3 className="text-lg font-bold text-white">{trainer.firstName} {trainer.lastName || ''}</h3>
               <p className="text-sm text-primary-400 font-medium mt-1">{trainer.specialty || 'General Fitness'}</p>
-              
+
               <div className="w-full h-px bg-gradient-to-r from-transparent via-[#2a2e37] to-transparent my-4"></div>
-              
+
               <div className="flex justify-around w-full text-sm">
                 <div>
                   <div className="text-gray-400">Assigned</div>
@@ -179,6 +179,29 @@ export default function Trainers() {
                   </div>
                 )}
               </div>
+
+              {/* Device UID */}
+              {trainer.employeeNo && (
+                <div className="mt-3 w-full">
+                  <div className="flex items-center justify-center gap-2 text-xs">
+                    <span className="text-gray-500">Device UID:</span>
+                    <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                      {trainer.employeeNo}
+                    </span>
+                    {trainer.deviceSynced ? (
+                      <span className="text-green-400 flex items-center gap-1">
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                        Synced
+                      </span>
+                    ) : trainer.employeeNo ? (
+                      <span className="text-yellow-400 flex items-center gap-1">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
+                        Not Synced
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              )}
 
               {/* Action buttons — shown on hover, stop propagation so they don't open profile */}
               <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -265,6 +288,12 @@ export default function Trainers() {
                   <div className="text-xs text-gray-500 mb-1">Joined</div>
                   <div className="text-sm text-white font-medium">{new Date(profileTrainer.createdAt).toLocaleDateString()}</div>
                 </div>
+                {profileTrainer.employeeNo && (
+                  <div className="glass bg-[#0f1115]/50 rounded-lg p-3">
+                    <div className="text-xs text-gray-500 mb-1">Device UID</div>
+                    <div className="text-sm text-white font-mono font-bold">{profileTrainer.employeeNo}</div>
+                  </div>
+                )}
               </div>
 
               {/* Assigned Members */}
@@ -329,37 +358,37 @@ export default function Trainers() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">First Name</label>
-                  <input required type="text" className="input-field" value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} />
+                  <input required type="text" className="input-field" value={formData.firstName} onChange={e => setFormData({ ...formData, firstName: e.target.value })} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Last Name</label>
-                  <input type="text" className="input-field" value={formData.lastName || ''} onChange={e => setFormData({...formData, lastName: e.target.value})} />
+                  <input type="text" className="input-field" value={formData.lastName || ''} onChange={e => setFormData({ ...formData, lastName: e.target.value })} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Specialty</label>
-                  <input type="text" className="input-field" value={formData.specialty} onChange={e => setFormData({...formData, specialty: e.target.value})} />
+                  <input type="text" className="input-field" value={formData.specialty} onChange={e => setFormData({ ...formData, specialty: e.target.value })} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Phone</label>
-                  <input type="text" placeholder="03XX-XXXXXXX" className="input-field" value={formData.phone || ''} onChange={e => setFormData({...formData, phone: formatPhone(e.target.value)})} />
+                  <input type="text" placeholder="03XX-XXXXXXX" className="input-field" value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: formatPhone(e.target.value) })} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">CNIC / National ID</label>
-                  <input type="text" placeholder="XXXXX-XXXXXXX-X" className="input-field" value={formData.cnic || ''} onChange={e => setFormData({...formData, cnic: formatCNIC(e.target.value)})} />
+                  <input type="text" placeholder="XXXXX-XXXXXXX-X" className="input-field" value={formData.cnic || ''} onChange={e => setFormData({ ...formData, cnic: formatCNIC(e.target.value) })} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Date of Birth</label>
-                  <input type="date" className="input-field" value={formData.dob || ''} onChange={e => setFormData({...formData, dob: e.target.value})} />
+                  <input type="date" className="input-field" value={formData.dob || ''} onChange={e => setFormData({ ...formData, dob: e.target.value })} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Gender</label>
-                  <select className="input-field" value={formData.gender || ''} onChange={e => setFormData({...formData, gender: e.target.value})}>
+                  <select className="input-field" value={formData.gender || ''} onChange={e => setFormData({ ...formData, gender: e.target.value })}>
                     <option value="">Select Gender</option>
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
@@ -368,10 +397,10 @@ export default function Trainers() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">Address</label>
-                  <input type="text" className="input-field" value={formData.address || ''} onChange={e => setFormData({...formData, address: e.target.value})} />
+                  <input type="text" className="input-field" value={formData.address || ''} onChange={e => setFormData({ ...formData, address: e.target.value })} />
                 </div>
               </div>
-              
+
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-[#2a2e37]">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="btn-secondary">Cancel</button>
                 <button type="submit" className="btn-primary">Save Trainer</button>

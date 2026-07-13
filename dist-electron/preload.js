@@ -71,6 +71,12 @@ import_electron.contextBridge.exposeInMainWorld("api", {
     configure: (config) => import_electron.ipcRenderer.invoke("device:configure", config),
     getConfig: () => import_electron.ipcRenderer.invoke("device:get-config"),
     /**
+     * Sync all existing attendance records from the device.
+     * This is useful when the app was closed while the device was on,
+     * and we need to fetch attendance that was recorded during that time.
+     */
+    syncAttendance: () => import_electron.ipcRenderer.invoke("device:sync-attendance"),
+    /**
      * Subscribe to attendance events from the device.
      * Returns a cleanup function that MUST be called on component unmount
      * to prevent listener leaks.
@@ -81,17 +87,23 @@ import_electron.contextBridge.exposeInMainWorld("api", {
       const expiredListener = (_, data) => callback("expired", data);
       const inactiveListener = (_, data) => callback("inactive", data);
       const unknownListener = (_, data) => callback("unknown", data);
+      const trainerCheckinListener = (_, data) => callback("trainerCheckin", data);
+      const trainerCheckoutListener = (_, data) => callback("trainerCheckout", data);
       import_electron.ipcRenderer.on("attendance:checkin", checkinListener);
       import_electron.ipcRenderer.on("attendance:checkout", checkoutListener);
       import_electron.ipcRenderer.on("attendance:expired", expiredListener);
       import_electron.ipcRenderer.on("attendance:inactive", inactiveListener);
       import_electron.ipcRenderer.on("attendance:unknown", unknownListener);
+      import_electron.ipcRenderer.on("trainerAttendance:checkin", trainerCheckinListener);
+      import_electron.ipcRenderer.on("trainerAttendance:checkout", trainerCheckoutListener);
       return () => {
         import_electron.ipcRenderer.removeListener("attendance:checkin", checkinListener);
         import_electron.ipcRenderer.removeListener("attendance:checkout", checkoutListener);
         import_electron.ipcRenderer.removeListener("attendance:expired", expiredListener);
         import_electron.ipcRenderer.removeListener("attendance:inactive", inactiveListener);
         import_electron.ipcRenderer.removeListener("attendance:unknown", unknownListener);
+        import_electron.ipcRenderer.removeListener("trainerAttendance:checkin", trainerCheckinListener);
+        import_electron.ipcRenderer.removeListener("trainerAttendance:checkout", trainerCheckoutListener);
       };
     },
     onStatusChange: (callback) => {
@@ -99,6 +111,22 @@ import_electron.contextBridge.exposeInMainWorld("api", {
       import_electron.ipcRenderer.on("device:status", listener);
       return () => {
         import_electron.ipcRenderer.removeListener("device:status", listener);
+      };
+    },
+    syncUsers: () => import_electron.ipcRenderer.invoke("device:sync-users"),
+    /**
+     * Subscribe to auto-created events from device sync.
+     * Fires when a fingerprint scan triggers automatic member/trainer creation.
+     * Returns a cleanup function.
+     */
+    onAutoCreated: (callback) => {
+      const memberListener = (_, data) => callback("member", data);
+      const trainerListener = (_, data) => callback("trainer", data);
+      import_electron.ipcRenderer.on("member:auto-created", memberListener);
+      import_electron.ipcRenderer.on("trainer:auto-created", trainerListener);
+      return () => {
+        import_electron.ipcRenderer.removeListener("member:auto-created", memberListener);
+        import_electron.ipcRenderer.removeListener("trainer:auto-created", trainerListener);
       };
     }
   }

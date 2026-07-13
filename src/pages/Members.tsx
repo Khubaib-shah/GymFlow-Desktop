@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { buildWhatsAppUrl } from "../utils/whatsapp";
 
 // Utility functions for masking and formatting
 const formatCNIC = (value: string) => {
@@ -35,56 +36,6 @@ const getDaysUntilExpiry = (membershipEnd: string | null) => {
     (end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
   );
   return diff;
-};
-
-const buildWhatsAppUrl = (member: any) => {
-  if (!member.phone) return null;
-  // Never show WhatsApp for suspended members (2+ months expired, no template)
-  if (member.status === "SUSPENDED") return null;
-  // Convert PK phone: strip dashes, replace leading 0 with 92
-  const digits = member.phone.replace(/-/g, "");
-  const intl = digits.startsWith("0") ? "92" + digits.slice(1) : digits;
-
-  const name = `${member.firstName} ${member.lastName || ""}`.trim();
-  const daysLeft = getDaysUntilExpiry(member.membershipEnd);
-  const expiryDate = member.membershipEnd
-    ? new Date(member.membershipEnd).toLocaleDateString("en-PK", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    })
-    : "";
-
-  let message = "";
-
-  if (member.status === "LEAD") {
-    // Template: Lead follow-up
-    message = `Hi ${name}! 👋 Thanks for your interest in GymFlow. We'd love to welcome you to our gym. 💪 Reply to this message or visit us to explore our membership plans and get started!`;
-  } else if (daysLeft !== null && daysLeft >= 0 && daysLeft <= 7) {
-    // Template: Expiring within 7 days
-    message = `Hi ${name}, your membership expires on ${expiryDate}. You have ${daysLeft} day(s) left. Please renew before the expiry date to continue your workouts without interruption. 💪`;
-  } else if (member.status === "EXPIRED") {
-    const daysSinceExpiry = daysLeft !== null ? Math.abs(daysLeft) : 999;
-    if (daysSinceExpiry <= 15) {
-      // Template: Expired ≤15 days ago — come back message
-      message = `Hi ${name}, your membership expired on ${expiryDate}. We'd love to have you back! Renew today and continue your fitness journey with GymFlow. 💪`;
-    } else {
-      // Template: Expired >15 days — 2-month admission deadline warning
-      const twoMonthDeadline = new Date(member.membershipEnd);
-      twoMonthDeadline.setMonth(twoMonthDeadline.getMonth() + 2);
-      const deadlineDate = twoMonthDeadline.toLocaleDateString("en-PK", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      });
-      message = `Hi ${name}, your membership expired on ${expiryDate}. Please renew before ${deadlineDate} to keep your admission active and avoid paying the admission fee again.`;
-    }
-  } else {
-    // Template: Generic reminder for active members with plenty of time
-    message = `Hi ${name}, just a friendly reminder that your membership expires on ${expiryDate}. Renew now to keep training without interruption. Reply to this message if you need assistance. 💪`;
-  }
-
-  return `https://wa.me/${intl}?text=${encodeURIComponent(message)}`;
 };
 
 export default function Members() {
@@ -293,6 +244,18 @@ export default function Members() {
     if (!dataToSave.cnic) dataToSave.cnic = null;
     if (dataToSave.dob) dataToSave.dob = new Date(dataToSave.dob).toISOString();
     else dataToSave.dob = null;
+
+    // Auto-calculate membership dates for new ACTIVE members with a plan
+    if (!editingId && dataToSave.status === "ACTIVE" && dataToSave.planId) {
+      const selectedPlan = plans.find((p: any) => p.id === dataToSave.planId);
+      if (selectedPlan) {
+        const today = new Date();
+        dataToSave.membershipStart = today.toISOString();
+        const endDate = new Date(today);
+        endDate.setDate(endDate.getDate() + selectedPlan.durationDays);
+        dataToSave.membershipEnd = endDate.toISOString();
+      }
+    }
 
     if (editingId) {
       const {
@@ -597,10 +560,11 @@ export default function Members() {
           </div>
           <button
             onClick={fetchDeviceSyncStatus}
-            className="btn-secondary flex items-center gap-2"
+            disabled={syncLoading}
+            className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg
-              className="w-5 h-5"
+              className={`w-5 h-5 ${syncLoading ? 'animate-spin' : ''}`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -612,7 +576,7 @@ export default function Members() {
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
               />
             </svg>
-            Refresh Device
+            Sync
           </button>
           <button
             onClick={() => openModal()}
