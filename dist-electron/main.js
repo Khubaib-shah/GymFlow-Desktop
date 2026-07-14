@@ -276,10 +276,7 @@ var ZKClient = class {
         return;
       }
       try {
-        await this.withTimeout(
-          this.client.disconnect(),
-          3e3
-        );
+        await this.withTimeout(this.client.disconnect(), 3e3);
         deviceLogger.info("Disconnected from ZKTeco device");
       } catch (err) {
         deviceLogger.warn("Disconnect timeout", err);
@@ -299,17 +296,17 @@ var ZKClient = class {
       if (status !== void 0 && status !== null) {
         return status;
       }
-      await this.withTimeout(
-        this.client.getInfo(),
-        5e3
-      );
+      await this.withTimeout(this.client.getInfo(), 5e3);
       return true;
     });
   }
   async getDeviceInfo() {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const info = await this.withTimeout(this.client.getInfo(), 1e4);
+      const info = await this.withTimeout(
+        this.client.getInfo(),
+        1e4
+      );
       return {
         model: info?.model ?? void 0,
         serialNumber: info?.serialNumber ?? void 0,
@@ -339,7 +336,10 @@ var ZKClient = class {
           15e3
         );
         const logs = Array.isArray(response?.data) ? response.data : [];
-        deviceLogger.info("Fetched attendance logs from device", { count: logs.length, sampleLog: logs[0] });
+        deviceLogger.info("Fetched attendance logs from device", {
+          count: logs.length,
+          sampleLog: logs[0]
+        });
         return logs;
       } catch (error) {
         throw new Error(
@@ -386,12 +386,24 @@ var ZKClient = class {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       const packet = createDeleteUserPacket(userId);
-      await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE), 5e3);
+      await this.withTimeout(
+        this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE),
+        5e3
+      );
       try {
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DELETE_USER, packet), 1e4);
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_REFRESHDATA), 5e3);
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_DELETE_USER, packet),
+          1e4
+        );
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_REFRESHDATA),
+          5e3
+        );
       } finally {
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE), 5e3);
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE),
+          5e3
+        );
       }
     });
   }
@@ -399,10 +411,7 @@ var ZKClient = class {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.withTimeout(
-          this.client.clearAttendanceLog(),
-          1e4
-        );
+        await this.withTimeout(this.client.clearAttendanceLog(), 1e4);
       } catch (error) {
         throw new Error(
           `Failed to clear attendance: ${error instanceof Error ? error.message : String(error)}`
@@ -414,7 +423,10 @@ var ZKClient = class {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from("")), 5e3);
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from("")),
+          5e3
+        );
       } catch (error) {
         throw new Error(
           `Failed to restart device: ${error instanceof Error ? error.message : String(error)}`
@@ -428,7 +440,10 @@ var ZKClient = class {
     }
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      return await this.withTimeout(this.client.executeCmd(cmd, payload), 1e4);
+      return await this.withTimeout(
+        this.client.executeCmd(cmd, payload),
+        1e4
+      );
     });
   }
   async getTime() {
@@ -2188,9 +2203,6 @@ function registerTrainerAttendanceHandlers(ipcMain2, prisma2) {
       orderBy: { checkInTime: "desc" },
       include: { trainer: true }
     });
-  });
-  ipcMain2.handle("trainerAttendance:getActiveSession", async (_, trainerId) => {
-    return null;
   });
   ipcMain2.handle("trainerAttendance:manualEntry", async (_, trainerId) => {
     const trainer = await prisma2.trainer.findUnique({ where: { id: trainerId } });

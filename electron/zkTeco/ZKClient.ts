@@ -11,9 +11,7 @@ import { COMMANDS } from "./constants";
 import { createUserPacket } from "./helpers/createUserPacket";
 import { createDeleteUserPacket } from "./helpers/createDeleteUserPacket";
 
-
 export class ZKClient {
-
   private client: any = null;
   private commandQueue: (() => Promise<any>)[] = [];
   private isProcessing = false;
@@ -22,17 +20,12 @@ export class ZKClient {
   private isDisconnecting = false;
   private connectionId = 0;
 
-
-  private async withTimeout<T>(
-    promise: Promise<T>,
-    ms = 5000
-  ): Promise<T> {
-
+  private async withTimeout<T>(promise: Promise<T>, ms = 5000): Promise<T> {
     return Promise.race([
       promise,
       new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error("Operation timed out")), ms)
-      )
+        setTimeout(() => reject(new Error("Operation timed out")), ms),
+      ),
     ]);
   }
 
@@ -98,7 +91,6 @@ export class ZKClient {
         } finally {
           this.client = null;
         }
-
       }
 
       this.commandQueue = [];
@@ -107,18 +99,18 @@ export class ZKClient {
         settings.ip,
         settings.port,
         settings.timeout,
-        true
+        true,
       );
 
       try {
         await this.withTimeout(
           this.client.createSocket(),
-          settings.timeout + 2000
+          settings.timeout + 2000,
         );
       } catch (error) {
         this.client = null;
         throw new Error(
-          `Failed to connect to ZKTeco device: ${error instanceof Error ? error.message : String(error)}`
+          `Failed to connect to ZKTeco device: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
 
@@ -145,10 +137,7 @@ export class ZKClient {
       }
 
       try {
-        await this.withTimeout(
-          this.client.disconnect(),
-          3000
-        );
+        await this.withTimeout(this.client.disconnect(), 3000);
 
         deviceLogger.info("Disconnected from ZKTeco device");
       } catch (err) {
@@ -156,12 +145,10 @@ export class ZKClient {
       } finally {
         this.client = null;
       }
-
     } finally {
       this.isDisconnecting = false;
     }
   }
-
 
   async testConnection(): Promise<boolean> {
     if (!this.client) {
@@ -175,10 +162,7 @@ export class ZKClient {
         return status;
       }
 
-      await this.withTimeout(
-        this.client.getInfo(),
-        5000
-      );
+      await this.withTimeout(this.client.getInfo(), 5000);
 
       return true;
     });
@@ -187,7 +171,10 @@ export class ZKClient {
   async getDeviceInfo(): Promise<DeviceInfoPayload> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const info = await this.withTimeout(this.client.getInfo(), 10000) as any;
+      const info = (await this.withTimeout(
+        this.client.getInfo(),
+        10000,
+      )) as any;
       return {
         model: info?.model ?? undefined,
         serialNumber: info?.serialNumber ?? undefined,
@@ -202,10 +189,10 @@ export class ZKClient {
   async getUsers(): Promise<DeviceUserPayload[]> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const res = await this.withTimeout(
+      const res = (await this.withTimeout(
         this.client.getUsers(),
-        10000
-      ) as any;
+        10000,
+      )) as any;
       return res?.data ?? [];
     });
   }
@@ -214,12 +201,15 @@ export class ZKClient {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        const response = await this.withTimeout(
+        const response = (await this.withTimeout(
           this.client.getAttendances(),
-          15000
-        ) as any;
+          15000,
+        )) as any;
         const logs = Array.isArray(response?.data) ? response.data : [];
-        deviceLogger.info("Fetched attendance logs from device", { count: logs.length, sampleLog: logs[0] });
+        deviceLogger.info("Fetched attendance logs from device", {
+          count: logs.length,
+          sampleLog: logs[0],
+        });
         return logs;
       } catch (error) {
         throw new Error(
@@ -235,30 +225,29 @@ export class ZKClient {
 
       await this.withTimeout(
         this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE),
-        5000
+        5000,
       );
 
       try {
         await this.withTimeout(
           this.client.executeCmd(COMMANDS.CMD_USER_WRQ, packet),
-          10000
+          10000,
         );
 
         await this.withTimeout(
           this.client.executeCmd(COMMANDS.CMD_REFRESHDATA),
-          5000
+          5000,
         );
       } catch (error) {
         throw new Error(
-          `Failed to set user: ${error instanceof Error
-            ? error.message
-            : String(error)
-          }`
+          `Failed to set user: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         );
       } finally {
         await this.withTimeout(
           this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE),
-          5000
+          5000,
         );
       }
     });
@@ -277,19 +266,26 @@ export class ZKClient {
     return this.queueCommand(async () => {
       const packet = createDeleteUserPacket(userId);
 
-      await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE), 5000);
+      await this.withTimeout(
+        this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE),
+        5000,
+      );
 
       try {
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_DELETE_USER, packet),
+          10000,
+        );
 
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DELETE_USER, packet), 10000);
-
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_REFRESHDATA), 5000);
-
-      }
-      finally {
-
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE), 5000);
-
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_REFRESHDATA),
+          5000,
+        );
+      } finally {
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE),
+          5000,
+        );
       }
     });
   }
@@ -298,10 +294,7 @@ export class ZKClient {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.withTimeout(
-          this.client.clearAttendanceLog(),
-          10000
-        );
+        await this.withTimeout(this.client.clearAttendanceLog(), 10000);
       } catch (error) {
         throw new Error(
           `Failed to clear attendance: ${error instanceof Error ? error.message : String(error)}`,
@@ -314,7 +307,10 @@ export class ZKClient {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from('')), 5000);
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from("")),
+          5000,
+        );
       } catch (error) {
         throw new Error(
           `Failed to restart device: ${error instanceof Error ? error.message : String(error)}`,
@@ -324,20 +320,22 @@ export class ZKClient {
   }
 
   async executeCommand(cmd: number, payload?: Buffer): Promise<any> {
-
     if (!this.client || this.isDisconnecting || this.isConnecting) {
       throw new Error("Device is not ready");
     }
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      return await this.withTimeout(this.client.executeCmd(cmd, payload), 10000);
+      return await this.withTimeout(
+        this.client.executeCmd(cmd, payload),
+        10000,
+      );
     });
   }
 
   async getTime(): Promise<Date> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const time = await this.client.getTime()
+      const time = await this.client.getTime();
       return time;
     });
   }

@@ -13,13 +13,10 @@ import { ZKClient } from "../ZKClient";
   });
 
   const users = await client.getUsers();
-  console.log("Users before delete:", users);
 
   if (!users.length) {
     throw new Error("No users found");
   }
-
-  console.log("Deleting UID:", users[0].uid);
 
   // <-- THIS is the important line
   // Ensure uid is defined before calling deleteUser
@@ -28,8 +25,6 @@ import { ZKClient } from "../ZKClient";
   }
 
   const usersAfter = await client.getUsers();
-
-  console.log("Users after delete:", usersAfter);
 
   await client.disconnect();
 })();

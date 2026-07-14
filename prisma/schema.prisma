@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
   engineType = "library"
 }
 
@@ -17,73 +17,72 @@ model Owner {
 }
 
 model Member {
-  id              String         @id @default(cuid())
-  employeeNo      Int?           @unique
-  deviceSynced    Boolean        @default(false)
+  id              String    @id @default(cuid())
+  employeeNo      Int?      @unique
+  deviceSynced    Boolean   @default(false)
   firstName       String
   lastName        String?
   email           String?
   phone           String?
-  photoPath       String?
-  cnic            String?        @unique
+  cnic            String?   @unique
   dob             DateTime?
   gender          String?
   address         String?
-  biometricId     String?        @unique
+  biometricId     String?   @unique
   membershipStart DateTime?
   membershipEnd   DateTime?
-  status          String         @default("ACTIVE") // ACTIVE, EXPIRED
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  
-  trainerId       String?
-  trainer         Trainer?       @relation(fields: [trainerId], references: [id], onDelete: SetNull)
-  
-  planId          String?
-  plan            MembershipPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  status          String    @default("ACTIVE") // ACTIVE, EXPIRED
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  attendances     Attendance[]
-  payments        Payment[]
+  trainerId String?
+  trainer   Trainer? @relation(fields: [trainerId], references: [id], onDelete: SetNull)
+
+  planId String?
+  plan   MembershipPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  attendances Attendance[]
+  payments    Payment[]
 }
 
 model Trainer {
-  id           String   @id @default(cuid())
-  employeeNo   Int?     @unique
-  deviceSynced Boolean  @default(false)
+  id           String    @id @default(cuid())
+  employeeNo   Int?      @unique
+  deviceSynced Boolean   @default(false)
   firstName    String
   lastName     String?
   phone        String?
   specialty    String?
-  cnic         String?  @unique
+  cnic         String?   @unique
   dob          DateTime?
   gender       String?
   address      String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  
-  members      Member[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  members            Member[]
   trainerAttendances TrainerAttendance[]
 }
 
 model MembershipPlan {
-  id          String   @id @default(cuid())
-  name        String
+  id           String   @id @default(cuid())
+  name         String
   durationDays Int
-  price       Float
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  members     Member[]
+  price        Float
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  members Member[]
 }
 
 model Attendance {
-  id          String   @id @default(cuid())
-  memberId    String
-  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  id           String    @id @default(cuid())
+  memberId     String
+  member       Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
   checkInTime  DateTime
   checkOutTime DateTime?
-  method       String   @default("BIOMETRIC") // BIOMETRIC, MANUAL
-  createdAt   DateTime @default(now())
+  method       String    @default("BIOMETRIC") // BIOMETRIC, MANUAL
+  createdAt    DateTime  @default(now())
 }
 
 model Payment {
@@ -99,11 +98,11 @@ model Payment {
 }
 
 model TrainerAttendance {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   trainerId    String
-  trainer      Trainer  @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  trainer      Trainer   @relation(fields: [trainerId], references: [id], onDelete: Cascade)
   checkInTime  DateTime
   checkOutTime DateTime?
-  method       String   @default("MANUAL")
-  createdAt    DateTime @default(now())
+  method       String    @default("MANUAL")
+  createdAt    DateTime  @default(now())
 }

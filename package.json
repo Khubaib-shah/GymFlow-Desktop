@@ -9,21 +9,25 @@
   },
   "scripts": {
     "dev": "concurrently \"vite\" \"tsup --watch\" \"wait-on tcp:5173 dist-electron/main.js && electron .\"",
-    "build": "vite build && tsup && node safe-build.js",
-    "electron": "electron .",
-    "postinstall": "patch-package"
+    "build:web": "vite build",
+    "build:electron": "tsup",
+    "package": "electron-builder",
+    "dist": "npm run build:web && npm run build:electron && node safe-build.js"
   },
   "build": {
-    "appId": "com.gymflow.saas",
-    "productName": "Gymflow Desktop",
-    "icon": "public/assets/logo/logo3.png",
+    "appId": "com.gymflow.desktop",
+    "productName": "Gymflow",
+    "icon": "build/icon.ico",
+    "copyright": "Copyright © 2026 Khubaib Shah",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "prisma/**/*"
+      "node_modules/@prisma/client/**/*",
+      "node_modules/.prisma/**/*",
+      "package.json"
     ],
     "extraResources": [
       {
@@ -32,15 +36,28 @@
       }
     ],
     "asarUnpack": [
-      "prisma/**/*",
-      "node_modules/@prisma/client/**/*",
-      "node_modules/.prisma/client/**/*"
+      "**/*.node",
+      "node_modules/.prisma/**/*",
+      "node_modules/@prisma/**/*"
     ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GymFlow",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    },
     "win": {
-      "target": [
-        "nsis"
-      ]
-    }
+      "target": "nsis",
+      "artifactName": "GymFlow-${version}-Setup.${ext}",
+      "executableName": "GymFlow",
+      "publisherName": "Khubaib Shah"
+    },
+    "compression": "maximum",
+    "publish": null
   },
   "main": "dist-electron/main.js",
   "dependencies": {

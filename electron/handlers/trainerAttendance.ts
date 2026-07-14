@@ -7,11 +7,6 @@ export function registerTrainerAttendanceHandlers(ipcMain: any, prisma: any) {
     });
   });
 
-  // Check-in only: no active session concept needed
-  ipcMain.handle('trainerAttendance:getActiveSession', async (_: any, trainerId: string) => {
-    return null;
-  });
-
   // Manual check-in only (no checkout)
   ipcMain.handle('trainerAttendance:manualEntry', async (_: any, trainerId: string) => {
     const trainer = await prisma.trainer.findUnique({ where: { id: trainerId } });
