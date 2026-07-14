@@ -1,16 +1,40 @@
 import ZKLib from "node-zklib";
 import type {
-  DeviceInfoPayload,
-  DeviceAttendancePayload,
   DeviceUserPayload,
+  DeviceUser,
+  DeviceAttendancePayload,
+  DeviceInfoPayload,
+  ZkTecoDeviceSettings,
 } from "./types";
 import { deviceLogger } from "./DeviceLogger";
 import { COMMANDS } from "./constants";
+import { createUserPacket } from "./helpers/createUserPacket";
+import { createDeleteUserPacket } from "./helpers/createDeleteUserPacket";
+
 
 export class ZKClient {
+
   private client: any = null;
   private commandQueue: (() => Promise<any>)[] = [];
   private isProcessing = false;
+
+  private isConnecting = false;
+  private isDisconnecting = false;
+  private connectionId = 0;
+
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    ms = 5000
+  ): Promise<T> {
+
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error("Operation timed out")), ms)
+      )
+    ]);
+  }
 
   private async processQueue() {
     if (this.isProcessing) return;
@@ -22,7 +46,7 @@ export class ZKClient {
         try {
           await cmd();
         } catch (err) {
-          // already handled in each command's catch block
+          deviceLogger.error("Queue command failed", err);
         }
       }
     }
@@ -32,61 +56,138 @@ export class ZKClient {
 
   private queueCommand<T>(cmd: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
+      const connectionId = this.connectionId;
+
       this.commandQueue.push(async () => {
         try {
+          if (connectionId !== this.connectionId) {
+            throw new Error("Connection changed");
+          }
+
           const result = await cmd();
+
+          if (connectionId !== this.connectionId) {
+            throw new Error("Connection changed");
+          }
+
           resolve(result);
         } catch (err) {
           reject(err);
         }
       });
-      this.processQueue();
+
+      void this.processQueue();
     });
   }
 
-  async connect(settings: any): Promise<void> {
-    if (this.client) {
-      try {
-        await this.client.disconnect();
-      } catch { }
-      this.client = null;
+  async connect(settings: ZkTecoDeviceSettings): Promise<void> {
+    if (this.isConnecting) {
+      throw new Error("Already connecting");
     }
 
-    this.client = new ZKLib(settings.ip, settings.port, settings.timeout, true);
-    await this.queueCommand(async () => {
-      // node-zklib uses createSocket() to establish connection, not connect()
-      // The 4th parameter (inport) is used for UDP fallback
-      await this.client.createSocket();
+    this.isConnecting = true;
+
+    try {
+      this.connectionId++;
+
+      if (this.client) {
+        try {
+          await this.withTimeout(this.client.disconnect(), 3000);
+        } catch (err) {
+          deviceLogger.warn("Disconnect timeout", err);
+        } finally {
+          this.client = null;
+        }
+
+      }
+
+      this.commandQueue = [];
+
+      this.client = new ZKLib(
+        settings.ip,
+        settings.port,
+        settings.timeout,
+        true
+      );
+
+      try {
+        await this.withTimeout(
+          this.client.createSocket(),
+          settings.timeout + 2000
+        );
+      } catch (error) {
+        this.client = null;
+        throw new Error(
+          `Failed to connect to ZKTeco device: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
       deviceLogger.info("Connected to ZKTeco device");
-    });
+    } finally {
+      this.isConnecting = false;
+    }
   }
 
   async disconnect(): Promise<void> {
-    if (!this.client) return;
+    if (this.isDisconnecting) {
+      return;
+    }
+
+    this.isDisconnecting = true;
+
     try {
-      await this.client.disconnect();
-      deviceLogger.info("Disconnected from ZKTeco device");
-    } catch { }
-    this.client = null;
+      this.connectionId++;
+
+      this.commandQueue = [];
+
+      if (!this.client) {
+        return;
+      }
+
+      try {
+        await this.withTimeout(
+          this.client.disconnect(),
+          3000
+        );
+
+        deviceLogger.info("Disconnected from ZKTeco device");
+      } catch (err) {
+        deviceLogger.warn("Disconnect timeout", err);
+      } finally {
+        this.client = null;
+      }
+
+    } finally {
+      this.isDisconnecting = false;
+    }
   }
 
+
   async testConnection(): Promise<boolean> {
-    if (!this.client) throw new Error("Not connected to device");
-    // testConnection is not a method in node-zklib - use getSocketStatus or getInfo instead
-    // First check if socket exists and is connected
-    const status = await this.client.getSocketStatus?.();
-    if (status !== undefined && status !== null) {
-      return status;
+    if (!this.client) {
+      throw new Error("Not connected to device");
     }
-    // Fallback: try to get device info as a connectivity test
-    await this.client.getInfo();
-    return true;
+
+    return this.queueCommand(async () => {
+      const status = await this.client.getSocketStatus?.();
+
+      if (status !== undefined && status !== null) {
+        return status;
+      }
+
+      await this.withTimeout(
+        this.client.getInfo(),
+        5000
+      );
+
+      return true;
+    });
   }
 
   async getDeviceInfo(): Promise<DeviceInfoPayload> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const info = await this.client.getInfo();
+      const info = await this.withTimeout(this.client.getInfo(), 10000) as any;
       return {
         model: info?.model ?? undefined,
         serialNumber: info?.serialNumber ?? undefined,
@@ -101,7 +202,10 @@ export class ZKClient {
   async getUsers(): Promise<DeviceUserPayload[]> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const res = await this.client.getUsers();
+      const res = await this.withTimeout(
+        this.client.getUsers(),
+        10000
+      ) as any;
       return res?.data ?? [];
     });
   }
@@ -110,7 +214,10 @@ export class ZKClient {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        const response = await this.client.getAttendances();
+        const response = await this.withTimeout(
+          this.client.getAttendances(),
+          15000
+        ) as any;
         const logs = Array.isArray(response?.data) ? response.data : [];
         deviceLogger.info("Fetched attendance logs from device", { count: logs.length, sampleLog: logs[0] });
         return logs;
@@ -122,32 +229,68 @@ export class ZKClient {
     });
   }
 
-  async addUser(user: DeviceUserPayload): Promise<void> {
-    if (!this.client) throw new Error("Not connected to device");
-    return this.queueCommand(async () => {
-      // setUser is not a method in node-zklib - implement using executeCmd with CMD_USER_WRQ
-      // This is a simplified implementation - actual user enrollment may require more complex handling
-      // Note: node-zklib doesn't support setUser directly, need to use executeCmd or implement custom logic
-      deviceLogger.warn("addUser: node-zklib doesn't support setUser directly. Use executeCmd for user management.");
-      // For now, we'll use executeCmd with CMD_USER_WRQ - but actual implementation needs proper buffer encoding
-      // This is a placeholder that logs the limitation
+  async setUser(user: DeviceUserPayload): Promise<void> {
+    return this.queueCommand<void>(async () => {
+      const packet = createUserPacket(user as DeviceUser);
+
+      await this.withTimeout(
+        this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE),
+        5000
+      );
+
+      try {
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_USER_WRQ, packet),
+          10000
+        );
+
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_REFRESHDATA),
+          5000
+        );
+      } catch (error) {
+        throw new Error(
+          `Failed to set user: ${error instanceof Error
+            ? error.message
+            : String(error)
+          }`
+        );
+      } finally {
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE),
+          5000
+        );
+      }
     });
   }
 
+  async addUser(user: DeviceUserPayload): Promise<void> {
+    await this.setUser(user);
+  }
+
   async updateUser(user: DeviceUserPayload): Promise<void> {
-    if (!this.client) throw new Error("Not connected to device");
-    // Same as addUser - node-zklib doesn't have setUser method
-    return this.addUser(user);
+    await this.setUser(user);
   }
 
   async deleteUser(userId: number): Promise<void> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      // Note: The original code was calling clearAttendanceLog() which was incorrect
-      // node-zklib doesn't have a direct delete user method
-      // Proper implementation would use CMD_DELETE_USER with proper buffer encoding
-      deviceLogger.warn(`deleteUser: node-zklib doesn't support direct user deletion. UserId ${userId} was provided.`);
-      // This is a placeholder - actual implementation would need proper protocol handling
+      const packet = createDeleteUserPacket(userId);
+
+      await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE), 5000);
+
+      try {
+
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DELETE_USER, packet), 10000);
+
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_REFRESHDATA), 5000);
+
+      }
+      finally {
+
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE), 5000);
+
+      }
     });
   }
 
@@ -155,7 +298,10 @@ export class ZKClient {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.client.clearAttendanceLog();
+        await this.withTimeout(
+          this.client.clearAttendanceLog(),
+          10000
+        );
       } catch (error) {
         throw new Error(
           `Failed to clear attendance: ${error instanceof Error ? error.message : String(error)}`,
@@ -168,7 +314,7 @@ export class ZKClient {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from(''));
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from('')), 5000);
       } catch (error) {
         throw new Error(
           `Failed to restart device: ${error instanceof Error ? error.message : String(error)}`,
@@ -178,18 +324,21 @@ export class ZKClient {
   }
 
   async executeCommand(cmd: number, payload?: Buffer): Promise<any> {
+
+    if (!this.client || this.isDisconnecting || this.isConnecting) {
+      throw new Error("Device is not ready");
+    }
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const res = await this.client.executeCmd(cmd, payload);
-      return res;
+      return await this.withTimeout(this.client.executeCmd(cmd, payload), 10000);
     });
   }
 
   async getTime(): Promise<Date> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const info = await this.client.getInfo();
-      return new Date();
+      const time = await this.client.getTime()
+      return time;
     });
   }
 }

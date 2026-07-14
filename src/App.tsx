@@ -35,7 +35,6 @@ export default function App() {
         const memberName = `${data.member?.firstName || ''} ${data.member?.lastName || ''}`.trim() || 'Member';
         let msg = '';
         if (type === 'checkin') msg = `Welcome, ${memberName}`;
-        else if (type === 'checkout') msg = `Goodbye, ${memberName}`;
         else if (type === 'expired') msg = `Dear ${memberName}, your subscription has expired. Please renew your membership.`;
         else if (type === 'inactive') msg = `Dear ${memberName}, your membership has been suspended. Please contact reception.`;
         else if (type === 'unknown') msg = `Member not found. Please contact reception.`;

@@ -1,7 +1,6 @@
-import { COMMANDS } from "../constants";
-import { createUserPacket } from "../helpers/createUserPacket";
-
-const ZKLib = require("node-zklib");
+import { COMMANDS } from "../constants.ts";
+import { createUserPacket } from "../helpers/createUserPacket.ts";
+import ZKLib from "node-zklib";
 
 (async () => {
   const zk = new ZKLib("192.168.1.2", 4370, 10000, 4000);

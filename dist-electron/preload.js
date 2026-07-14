@@ -32,8 +32,7 @@ import_electron.contextBridge.exposeInMainWorld("api", {
   attendance: {
     getRecent: (limit) => import_electron.ipcRenderer.invoke("attendance:getRecent", limit),
     getAll: () => import_electron.ipcRenderer.invoke("attendance:getAll"),
-    manualEntry: (memberId) => import_electron.ipcRenderer.invoke("attendance:manualEntry", memberId),
-    getActiveSession: (memberId) => import_electron.ipcRenderer.invoke("attendance:getActiveSession", memberId)
+    manualEntry: (memberId) => import_electron.ipcRenderer.invoke("attendance:manualEntry", memberId)
   },
   payments: {
     getAll: () => import_electron.ipcRenderer.invoke("payments:getAll"),
@@ -42,8 +41,7 @@ import_electron.contextBridge.exposeInMainWorld("api", {
   },
   trainerAttendance: {
     getAll: () => import_electron.ipcRenderer.invoke("trainerAttendance:getAll"),
-    manualEntry: (trainerId) => import_electron.ipcRenderer.invoke("trainerAttendance:manualEntry", trainerId),
-    getActiveSession: (trainerId) => import_electron.ipcRenderer.invoke("trainerAttendance:getActiveSession", trainerId)
+    manualEntry: (trainerId) => import_electron.ipcRenderer.invoke("trainerAttendance:manualEntry", trainerId)
   },
   system: {
     getDbPath: () => import_electron.ipcRenderer.invoke("system:getDbPath"),
@@ -83,27 +81,21 @@ import_electron.contextBridge.exposeInMainWorld("api", {
      */
     onAttendanceEvent: (callback) => {
       const checkinListener = (_, data) => callback("checkin", data);
-      const checkoutListener = (_, data) => callback("checkout", data);
       const expiredListener = (_, data) => callback("expired", data);
       const inactiveListener = (_, data) => callback("inactive", data);
       const unknownListener = (_, data) => callback("unknown", data);
       const trainerCheckinListener = (_, data) => callback("trainerCheckin", data);
-      const trainerCheckoutListener = (_, data) => callback("trainerCheckout", data);
       import_electron.ipcRenderer.on("attendance:checkin", checkinListener);
-      import_electron.ipcRenderer.on("attendance:checkout", checkoutListener);
       import_electron.ipcRenderer.on("attendance:expired", expiredListener);
       import_electron.ipcRenderer.on("attendance:inactive", inactiveListener);
       import_electron.ipcRenderer.on("attendance:unknown", unknownListener);
       import_electron.ipcRenderer.on("trainerAttendance:checkin", trainerCheckinListener);
-      import_electron.ipcRenderer.on("trainerAttendance:checkout", trainerCheckoutListener);
       return () => {
         import_electron.ipcRenderer.removeListener("attendance:checkin", checkinListener);
-        import_electron.ipcRenderer.removeListener("attendance:checkout", checkoutListener);
         import_electron.ipcRenderer.removeListener("attendance:expired", expiredListener);
         import_electron.ipcRenderer.removeListener("attendance:inactive", inactiveListener);
         import_electron.ipcRenderer.removeListener("attendance:unknown", unknownListener);
         import_electron.ipcRenderer.removeListener("trainerAttendance:checkin", trainerCheckinListener);
-        import_electron.ipcRenderer.removeListener("trainerAttendance:checkout", trainerCheckoutListener);
       };
     },
     onStatusChange: (callback) => {

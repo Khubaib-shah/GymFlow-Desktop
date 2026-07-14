@@ -55,16 +55,12 @@ export async function upsertAttendanceFromBiometric(args: {
   deviceUserId: number;
   logItem: DeviceAttendancePayload;
 }): Promise<{
-  ipcEvent: "attendance:checkin" | "attendance:checkout";
+  ipcEvent: "attendance:checkin";
   attendance: any;
 }> {
   const { prisma, member, logItem, deviceUserId } = args;
 
   const now = roundToSeconds(new Date());
-
-  // Heuristic: use a session window similar to manual flow (6 hours)
-  const sixHoursAgo = new Date(now);
-  sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
 
   // Device logs can contain duplicates; normalize the computed check-in time.
   const checkInTime = roundToSeconds(getAttendanceTimestamp(logItem));
@@ -75,62 +71,7 @@ export async function upsertAttendanceFromBiometric(args: {
     checkInTime: checkInTime.toISOString(),
   });
 
-  // Duplicate prevention:
-  // 1) If we already have an active session, close it (checkout).
-  // 2) Avoid rapid re-checkout if device sends the same event repeatedly.
-  const activeSession = await prisma.attendance.findFirst({
-    where: {
-      memberId: member.id,
-      checkOutTime: null,
-      checkInTime: { gte: sixHoursAgo },
-    },
-    orderBy: { checkInTime: "desc" },
-  });
-
-  if (activeSession) {
-    // ─── 30-second rule ───
-    // If the user scans again within 30 seconds of check-in, ignore it (no checkout).
-    // Only mark as checkout if the scan is more than 30 seconds after check-in.
-    // Use the log's timestamp (checkInTime) instead of processing time (now) to avoid
-    // drift from polling intervals.
-    const secondsSinceCheckIn = Math.abs(
-      checkInTime.getTime() - new Date(activeSession.checkInTime).getTime()
-    ) / 1000;
-
-    if (secondsSinceCheckIn <= 30) {
-      // Within 30 seconds → treat as duplicate check-in, do NOT checkout
-      deviceLogger.info("Duplicate check-in detected (within 30s), skipping checkout", {
-        deviceUserId,
-        memberId: member.id,
-        secondsSinceCheckIn,
-      });
-      return { ipcEvent: "attendance:checkin", attendance: activeSession };
-    }
-
-    // More than 30 seconds → mark as checkout using the log's timestamp
-    const alreadyClosedWithin1s =
-      activeSession.checkOutTime != null &&
-      Math.abs(
-        new Date(activeSession.checkOutTime).getTime() - checkInTime.getTime(),
-      ) <= 1000;
-
-    if (!alreadyClosedWithin1s) {
-      const updated = await prisma.attendance.update({
-        where: { id: activeSession.id },
-        data: { checkOutTime: checkInTime, method: "BIOMETRIC" },
-      });
-      deviceLogger.info("Attendance checked out", {
-        deviceUserId,
-        memberId: member.id,
-        checkOutTime: checkInTime.toISOString(),
-      });
-      return { ipcEvent: "attendance:checkout", attendance: updated };
-    }
-
-    return { ipcEvent: "attendance:checkout", attendance: activeSession };
-  }
-
-  // If no active session, ensure we don't create a duplicate check-in within 1 second.
+  // Prevent duplicate check-in within 1 second (for biometric scans)
   const nearDuplicate = await prisma.attendance.findFirst({
     where: {
       memberId: member.id,
@@ -150,6 +91,7 @@ export async function upsertAttendanceFromBiometric(args: {
     return { ipcEvent: "attendance:checkin", attendance: nearDuplicate };
   }
 
+  // Always create a new check-in record (check-in only mode)
   const created = await prisma.attendance.create({
     data: {
       memberId: member.id,

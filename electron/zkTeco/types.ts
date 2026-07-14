@@ -28,15 +28,6 @@ export interface DeviceInfoPayload {
   deviceName?: string;
 }
 
-// export interface DeviceUserPayload {
-//   uid?: number;
-//   userId?: number;
-//   name?: string;
-//   role?: number;
-//   password?: string;
-//   cardno?: number;
-//   [key: string]: any;
-// }
 
 export interface DeviceAttendancePayload {
   id?: string;

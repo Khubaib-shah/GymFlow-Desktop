@@ -1,5 +1,5 @@
 import { Buffer } from "buffer";
-import { DeviceUser } from "../types";
+import type { DeviceUser } from "../types";
 
 export function createUserPacket(user: DeviceUser): Buffer {
   const packet = Buffer.alloc(72);

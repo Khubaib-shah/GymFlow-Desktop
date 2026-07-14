@@ -41,7 +41,6 @@ function MemberAttendanceTab() {
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [showMemberDropdown, setShowMemberDropdown] = useState(false);
-  const [activeSession, setActiveSession] = useState<any>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState('today');
@@ -61,8 +60,11 @@ function MemberAttendanceTab() {
     const api = (window as any).api;
     let cleanupListeners: (() => void) | undefined;
     if (api?.device?.onAttendanceEvent) {
-      cleanupListeners = api.device.onAttendanceEvent(() => {
-        fetchLogs();
+      cleanupListeners = api.device.onAttendanceEvent((type: string) => {
+        // Only refresh on attendance events (checkin only)
+        if (type === 'checkin') {
+          fetchLogs();
+        }
       });
     }
 
@@ -70,14 +72,6 @@ function MemberAttendanceTab() {
       if (cleanupListeners) cleanupListeners();
     };
   }, []);
-
-  useEffect(() => {
-    if (selectedMemberId) {
-      (window as any).api.attendance.getActiveSession(selectedMemberId).then(setActiveSession);
-    } else {
-      setActiveSession(null);
-    }
-  }, [selectedMemberId]);
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,8 +146,8 @@ function MemberAttendanceTab() {
             <thead className="bg-[#1a1d24] text-xs uppercase text-gray-400 border-b border-[#2a2e37]">
               <tr>
                 <th className="px-6 py-4 font-medium">Member</th>
-                <th className="px-6 py-4 font-medium">Check-In</th>
-                <th className="px-6 py-4 font-medium">Check-Out</th>
+                <th className="px-6 py-4 font-medium">Check-In Time</th>
+                <th className="px-6 py-4 font-medium">Date</th>
                 <th className="px-6 py-4 font-medium">Method</th>
               </tr>
             </thead>
@@ -165,22 +159,20 @@ function MemberAttendanceTab() {
                   {searchQuery ? 'No records match your search.' : 'No attendance records found for this period.'}
                 </td></tr>
               ) : (
-                filteredLogs.map(log => (
-                  <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
-                    <td className="px-6 py-4 font-medium text-white">{log.member.firstName} {log.member.lastName}</td>
-                    <td className="px-6 py-4">{new Date(log.checkInTime).toLocaleString()}</td>
-                    <td className="px-6 py-4 text-gray-400">
-                      {log.checkOutTime ? new Date(log.checkOutTime).toLocaleString() : (
-                        <span className="text-orange-400 font-medium animate-pulse">Active Session</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                        log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                      }`}>{log.method}</span>
-                    </td>
-                  </tr>
-                ))
+                filteredLogs.map(log => {
+                  const checkInDate = new Date(log.checkInTime);
+                  return (
+                    <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
+                      <td className="px-6 py-4 font-medium text-white">{log.member.firstName} {log.member.lastName}</td>
+                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString()}</td>
+                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString()}</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                          }`}>{log.method}</span>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -191,7 +183,7 @@ function MemberAttendanceTab() {
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="glass w-full max-w-sm rounded-2xl p-6 border border-[#2a2e37] shadow-2xl">
-            <h2 className="text-xl font-bold text-white mb-4">Manual Entry — Member</h2>
+            <h2 className="text-xl font-bold text-white mb-4">Manual Check-In — Member</h2>
             {errorMsg && <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">{errorMsg}</div>}
             <form onSubmit={handleManualSubmit} className="space-y-4">
               <div>
@@ -235,9 +227,9 @@ function MemberAttendanceTab() {
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-[#2a2e37]">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="btn-secondary">Cancel</button>
                 <button type="submit"
-                  className={`btn-primary ${activeSession ? 'bg-orange-600 hover:bg-orange-500 border-orange-500 shadow-orange-500/20' : ''}`}
+                  className="btn-primary"
                   disabled={!selectedMemberId}>
-                  {activeSession ? 'Check Out' : 'Check In'}
+                  Check In
                 </button>
               </div>
             </form>
@@ -259,7 +251,6 @@ function TrainerAttendanceTab() {
   const [selectedTrainerId, setSelectedTrainerId] = useState('');
   const [trainerSearch, setTrainerSearch] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
-  const [activeSession, setActiveSession] = useState<any>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState('today');
@@ -276,14 +267,6 @@ function TrainerAttendanceTab() {
     fetchLogs();
     (window as any).api.trainers.getAll().then(setTrainers);
   }, []);
-
-  useEffect(() => {
-    if (selectedTrainerId) {
-      (window as any).api.trainerAttendance.getActiveSession(selectedTrainerId).then(setActiveSession);
-    } else {
-      setActiveSession(null);
-    }
-  }, [selectedTrainerId]);
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -358,9 +341,9 @@ function TrainerAttendanceTab() {
               <tr>
                 <th className="px-6 py-4 font-medium">Trainer</th>
                 <th className="px-6 py-4 font-medium">Specialty</th>
-                <th className="px-6 py-4 font-medium">Check-In</th>
-                <th className="px-6 py-4 font-medium">Check-Out</th>
-                <th className="px-6 py-4 font-medium">Duration</th>
+                <th className="px-6 py-4 font-medium">Check-In Time</th>
+                <th className="px-6 py-4 font-medium">Date</th>
+                <th className="px-6 py-4 font-medium">Method</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#2a2e37]">
@@ -372,14 +355,7 @@ function TrainerAttendanceTab() {
                 </td></tr>
               ) : (
                 filteredLogs.map(log => {
-                  const duration = log.checkOutTime
-                    ? (() => {
-                        const diff = new Date(log.checkOutTime).getTime() - new Date(log.checkInTime).getTime();
-                        const h = Math.floor(diff / 3600000);
-                        const m = Math.floor((diff % 3600000) / 60000);
-                        return `${h}h ${m}m`;
-                      })()
-                    : null;
+                  const checkInDate = new Date(log.checkInTime);
                   return (
                     <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
                       <td className="px-6 py-4">
@@ -391,16 +367,11 @@ function TrainerAttendanceTab() {
                         </div>
                       </td>
                       <td className="px-6 py-4 text-gray-400">{log.trainer.specialty || '—'}</td>
-                      <td className="px-6 py-4">{new Date(log.checkInTime).toLocaleString()}</td>
-                      <td className="px-6 py-4 text-gray-400">
-                        {log.checkOutTime ? new Date(log.checkOutTime).toLocaleString() : (
-                          <span className="text-orange-400 font-medium animate-pulse">Active Session</span>
-                        )}
-                      </td>
+                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString()}</td>
+                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString()}</td>
                       <td className="px-6 py-4">
-                        {duration ? (
-                          <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20">{duration}</span>
-                        ) : '—'}
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                          }`}>{log.method}</span>
                       </td>
                     </tr>
                   );
@@ -415,7 +386,7 @@ function TrainerAttendanceTab() {
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="glass w-full max-w-sm rounded-2xl p-6 border border-[#2a2e37] shadow-2xl">
-            <h2 className="text-xl font-bold text-white mb-4">Trainer Check-In / Out</h2>
+            <h2 className="text-xl font-bold text-white mb-4">Trainer Check-In</h2>
             {errorMsg && <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">{errorMsg}</div>}
             <form onSubmit={handleManualSubmit} className="space-y-4">
               <div>
@@ -452,16 +423,16 @@ function TrainerAttendanceTab() {
                 {selectedTrainerId && (
                   <p className="text-xs text-green-400 mt-1 flex items-center gap-1">
                     <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                    Trainer selected{activeSession ? ' — currently checked in' : ''}
+                    Trainer selected
                   </p>
                 )}
               </div>
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-[#2a2e37]">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="btn-secondary">Cancel</button>
                 <button type="submit"
-                  className={`btn-primary ${activeSession ? 'bg-orange-600 hover:bg-orange-500 border-orange-500 shadow-orange-500/20' : 'bg-amber-600 hover:bg-amber-500 border-amber-500 shadow-amber-500/20'}`}
+                  className="btn-primary bg-amber-600 hover:bg-amber-500 border-amber-500 shadow-amber-500/20"
                   disabled={!selectedTrainerId}>
-                  {activeSession ? 'Check Out' : 'Check In'}
+                  Check In
                 </button>
               </div>
             </form>
@@ -473,7 +444,7 @@ function TrainerAttendanceTab() {
 }
 
 // ──────────────────────────────────────────────────────────
-// Main Attendance Page with Tab Toggle
+// Main Attendance Page - Check-In Only
 // ──────────────────────────────────────────────────────────
 export default function Attendance() {
   const [activeTab, setActiveTab] = useState<'members' | 'trainers'>('members');
@@ -484,17 +455,16 @@ export default function Attendance() {
       <div className="flex justify-between items-end">
         <div>
           <h1 className="text-3xl font-bold text-white tracking-tight">Attendance Log</h1>
-          <p className="text-gray-400 mt-1">Track check-ins and check-outs for members and trainers.</p>
+          <p className="text-gray-400 mt-1">Track member and trainer check-ins.</p>
         </div>
         {/* Tab Toggle */}
         <div className="flex bg-[#0f1115] border border-[#2a2e37] rounded-xl p-1 gap-1">
           <button
             onClick={() => setActiveTab('members')}
-            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'members'
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'members'
                 ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/30'
                 : 'text-gray-400 hover:text-white'
-            }`}
+              }`}
           >
             <span className="flex items-center gap-2">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -505,15 +475,14 @@ export default function Attendance() {
           </button>
           <button
             onClick={() => setActiveTab('trainers')}
-            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'trainers'
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'trainers'
                 ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
                 : 'text-gray-400 hover:text-white'
-            }`}
+              }`}
           >
             <span className="flex items-center gap-2">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138.3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
               </svg>
               Trainers
             </span>

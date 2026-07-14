@@ -29,19 +29,15 @@ async function main() {
 
   // ─── 2. MEMBERSHIP PLANS ────────────────────────────────────────────────────
   const plans = await Promise.all([
-    prisma.membershipPlan.create({ data: { name: 'Basic Plan',    durationDays: 30,  price: 2500 } }),
-    prisma.membershipPlan.create({ data: { name: 'Standard Plan', durationDays: 90,  price: 6500 } }),
-    prisma.membershipPlan.create({ data: { name: 'Premium Plan',  durationDays: 180, price: 11000 } }),
-    prisma.membershipPlan.create({ data: { name: 'Annual Plan',   durationDays: 365, price: 18000 } }),
-    prisma.membershipPlan.create({ data: { name: 'Student Plan',  durationDays: 30,  price: 1800 } }),
+    prisma.membershipPlan.create({ data: { name: 'Standard Plan', durationDays: 90, price: 6500 } }),
+    prisma.membershipPlan.create({ data: { name: 'Student Plan', durationDays: 30, price: 1800 } }),
   ]);
   console.log(`✅ ${plans.length} membership plans created`);
 
   // ─── 3. TRAINERS ────────────────────────────────────────────────────────────
   const trainerData = [
-    { firstName: 'Usman',   lastName: 'Malik',    phone: '0321-4567890', specialty: 'Strength & Conditioning', cnic: '35202-1234567-1', dob: new Date('1990-03-15'), gender: 'Male',   address: 'House 12, Block B, Gulberg III, Lahore' },
-    { firstName: 'Ayesha',  lastName: 'Siddiqui', phone: '0333-9876543', specialty: 'Yoga & Flexibility',      cnic: '42101-9876543-2', dob: new Date('1993-07-22'), gender: 'Female', address: 'Flat 5, Clifton Block 4, Karachi' },
-    { firstName: 'Bilal',   lastName: 'Chaudhry', phone: '0312-3456789', specialty: 'Boxing & MMA',            cnic: '35201-3456789-3', dob: new Date('1988-11-08'), gender: 'Male',   address: 'Street 7, F-7/2, Islamabad' },
+    { firstName: 'Ayesha', lastName: 'Siddiqui', phone: '0333-9876543', specialty: 'Yoga & Flexibility', cnic: '42101-9876543-2', dob: new Date('1993-07-22'), gender: 'Female', address: 'Flat 5, Clifton Block 4, Karachi' },
+    { firstName: 'Bilal', lastName: 'Chaudhry', phone: '0312-3456789', specialty: 'Boxing & MMA', cnic: '35201-3456789-3', dob: new Date('1988-11-08'), gender: 'Male', address: 'Street 7, F-7/2, Islamabad' },
   ];
 
   const trainers = [];
@@ -61,7 +57,7 @@ async function main() {
 
   const memberData = [];
   const totalMembers = 80;
-  
+
   // ACTIVE = 45, LEAD = 4, EXPIRED = 4, INACTIVE = 3, SUSPENDED = 4
   const statuses = [
     ...Array(58).fill('ACTIVE'),
@@ -77,17 +73,17 @@ async function main() {
     const ln = lastNames[i % lastNames.length];
     const city = cities[i % cities.length];
     const gender = ['Ayesha', 'Fatima', 'Zainab', 'Sara', 'Sana', 'Hina', 'Madiha', 'Nadia', 'Zoya', 'Mariam', 'Rabia'].includes(fn) ? 'Female' : 'Male';
-    
+
     let planId = null;
     let trainerId = null;
     let membershipStart = null;
     let membershipEnd = null;
-    
+
     if (status !== 'LEAD') {
       const plan = plans[i % plans.length];
       planId = plan.id;
       trainerId = i % 3 === 0 ? trainers[i % trainers.length].id : null;
-      
+
       if (status === 'ACTIVE') {
         // Some expiring soon (within 7 days) for WhatsApp demo
         const expiringVariant = i < 5; // first 5 active members expire soon
@@ -109,7 +105,7 @@ async function main() {
         membershipEnd = daysFromNow(30);
       }
     }
-    
+
     memberData.push({
       firstName: fn,
       lastName: ln,
@@ -153,7 +149,7 @@ async function main() {
         paymentDate: member.membershipStart || daysAgo(10),
         notes: `Admission Fee (Rs ${admissionFee}) + Plan Fee (Rs ${plan.price})`
       });
-      
+
       // Some members have a renewal payment
       if (!isSuspended && Math.random() > 0.6) {
         paymentRecords.push({
@@ -187,10 +183,10 @@ async function main() {
 
   // ─── 6. MEMBER ATTENDANCE (last 30 days) ────────────────────────────────────
   let attendanceCount = 0;
-  
+
   for (const member of members) {
     if (member.status === 'LEAD' || member.status === 'SUSPENDED') continue;
-    
+
     const daysToSimulate = member.status === 'ACTIVE' ? 30 : 5;
     const probability = member.status === 'ACTIVE' ? 0.7 : 0.2;
 

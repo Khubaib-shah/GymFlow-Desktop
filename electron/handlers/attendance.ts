@@ -1,4 +1,3 @@
-
 import { validateCheckIn } from '../zkTeco/membership/validateCheckIn';
 
 export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
@@ -21,29 +20,10 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
     });
   });
 
-
   ipcMain.handle('attendance:getActiveSession', async (_: any, memberId: string) => {
-    const sixHoursAgo = new Date();
-    sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
-    
-    // Clean up stale sessions (> 6 hours) automatically
-    const staleSessions = await prisma.attendance.findMany({
-      where: { memberId, checkOutTime: null, checkInTime: { lt: sixHoursAgo } }
-    });
-    
-    for (const session of staleSessions) {
-      const autoCheckOutTime = new Date(session.checkInTime);
-      autoCheckOutTime.setHours(autoCheckOutTime.getHours() + 6);
-      await prisma.attendance.update({
-        where: { id: session.id },
-        data: { checkOutTime: autoCheckOutTime }
-      });
-    }
-
-    return await prisma.attendance.findFirst({
-      where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },
-      orderBy: { checkInTime: 'desc' }
-    });
+    // Check-in only: no active session concept needed
+    // Return null to indicate no checkout functionality
+    return null;
   });
 
   ipcMain.handle('attendance:manualEntry', async (_: any, memberId: string) => {
@@ -55,30 +35,13 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
       throw new Error(validation.reason || "Check-in not allowed");
     }
 
-    const sixHoursAgo = new Date();
-    sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
-    
-    // Check if there's an active session
-    const activeSession = await prisma.attendance.findFirst({
-      where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },
-      orderBy: { checkInTime: 'desc' }
+    // Always create a new check-in record (check-in only mode)
+    return await prisma.attendance.create({
+      data: {
+        memberId,
+        checkInTime: new Date(),
+        method: 'MANUAL'
+      }
     });
-
-    if (activeSession) {
-      // Check Out
-      return await prisma.attendance.update({
-        where: { id: activeSession.id },
-        data: { checkOutTime: new Date() }
-      });
-    } else {
-      // Check In
-      return await prisma.attendance.create({
-        data: {
-          memberId,
-          checkInTime: new Date(),
-          method: 'MANUAL'
-        }
-      });
-    }
   });
 }

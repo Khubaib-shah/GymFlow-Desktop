@@ -150,6 +150,7 @@ export default function Settings() {
     setStatus("checking");
     setError("");
     try {
+
       const result = await (window as any).api.device.connect();
       if (result?.success) {
         setStatus("connected");

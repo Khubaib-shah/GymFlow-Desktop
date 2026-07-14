@@ -34,15 +34,15 @@ export function buildWhatsAppUrl(member: any): string | null {
 
     if (member.status === "LEAD") {
         // Template: Lead follow-up
-        message = `Hi ${name}! 👋 Thanks for your interest in GymFlow. We'd love to welcome you to our gym. 💪 Reply to this message or visit us to explore our membership plans and get started!`;
+        message = `Hi ${name}! Thanks for your interest in Fatloss Gym. We'd love to welcome you to our gym.  Reply to this message or visit us to explore our membership plans and get started!`;
     } else if (daysLeft !== null && daysLeft >= 0 && daysLeft <= 7) {
         // Template: Expiring within 7 days
-        message = `Hi ${name}, your membership expires on ${expiryDate}. You have ${daysLeft} day(s) left. Please renew before the expiry date to continue your workouts without interruption. 💪`;
+        message = `Hi ${name}, your membership expires on ${expiryDate}. You have ${daysLeft} day(s) left. Please renew before the expiry date to continue your workouts without interruption. `;
     } else if (member.status === "EXPIRED") {
         const daysSinceExpiry = daysLeft !== null ? Math.abs(daysLeft) : 999;
         if (daysSinceExpiry <= 15) {
             // Template: Expired ≤15 days ago — come back message
-            message = `Hi ${name}, your membership expired on ${expiryDate}. We'd love to have you back! Renew today and continue your fitness journey with GymFlow. 💪`;
+            message = `Hi ${name}, your membership expired on ${expiryDate}. We'd love to have you back! Renew today and continue your fitness journey with Fatloss Gym. `;
         } else {
             // Template: Expired >15 days — 2-month admission deadline warning
             const twoMonthDeadline = new Date(member.membershipEnd);
@@ -56,7 +56,7 @@ export function buildWhatsAppUrl(member: any): string | null {
         }
     } else if (member.status === "ACTIVE" && daysLeft !== null && daysLeft > 7 && daysLeft <= 30) {
         // Template: Active members expiring in 8-30 days
-        message = `Hi ${name}, your membership expires on ${expiryDate}. You have ${daysLeft} days left. Renew now to keep training without interruption. 💪`;
+        message = `Hi ${name}, your membership expires on ${expiryDate}. You have ${daysLeft} days left. Renew now to keep training without interruption. `;
     } else {
         // No WhatsApp message for:
         // - ACTIVE members with >30 days left (too early)

@@ -41,8 +41,6 @@ contextBridge.exposeInMainWorld("api", {
 
     manualEntry: (memberId: string) =>
       ipcRenderer.invoke("attendance:manualEntry", memberId),
-    getActiveSession: (memberId: string) =>
-      ipcRenderer.invoke("attendance:getActiveSession", memberId),
   },
   payments: {
     getAll: () => ipcRenderer.invoke("payments:getAll"),
@@ -54,8 +52,6 @@ contextBridge.exposeInMainWorld("api", {
     getAll: () => ipcRenderer.invoke("trainerAttendance:getAll"),
     manualEntry: (trainerId: string) =>
       ipcRenderer.invoke("trainerAttendance:manualEntry", trainerId),
-    getActiveSession: (trainerId: string) =>
-      ipcRenderer.invoke("trainerAttendance:getActiveSession", trainerId),
   },
   system: {
     getDbPath: () => ipcRenderer.invoke("system:getDbPath"),
@@ -100,32 +96,25 @@ contextBridge.exposeInMainWorld("api", {
      */
     onAttendanceEvent: (callback: (type: string, data: any) => void) => {
       const checkinListener = (_: any, data: any) => callback("checkin", data);
-      const checkoutListener = (_: any, data: any) =>
-        callback("checkout", data);
       const expiredListener = (_: any, data: any) => callback("expired", data);
       const inactiveListener = (_: any, data: any) =>
         callback("inactive", data);
       const unknownListener = (_: any, data: any) => callback("unknown", data);
       const trainerCheckinListener = (_: any, data: any) => callback("trainerCheckin", data);
-      const trainerCheckoutListener = (_: any, data: any) => callback("trainerCheckout", data);
 
       ipcRenderer.on("attendance:checkin", checkinListener);
-      ipcRenderer.on("attendance:checkout", checkoutListener);
       ipcRenderer.on("attendance:expired", expiredListener);
       ipcRenderer.on("attendance:inactive", inactiveListener);
       ipcRenderer.on("attendance:unknown", unknownListener);
       ipcRenderer.on("trainerAttendance:checkin", trainerCheckinListener);
-      ipcRenderer.on("trainerAttendance:checkout", trainerCheckoutListener);
 
       // Return cleanup function
       return () => {
         ipcRenderer.removeListener("attendance:checkin", checkinListener);
-        ipcRenderer.removeListener("attendance:checkout", checkoutListener);
         ipcRenderer.removeListener("attendance:expired", expiredListener);
         ipcRenderer.removeListener("attendance:inactive", inactiveListener);
         ipcRenderer.removeListener("attendance:unknown", unknownListener);
         ipcRenderer.removeListener("trainerAttendance:checkin", trainerCheckinListener);
-        ipcRenderer.removeListener("trainerAttendance:checkout", trainerCheckoutListener);
       };
     },
     onStatusChange: (callback: (status: any) => void) => {

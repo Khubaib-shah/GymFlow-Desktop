@@ -1,0 +1,72 @@
+diff --git a/node_modules/node-zklib/zklibtcp.js b/node_modules/node-zklib/zklibtcp.js
+index 194a9d8..ac5b8d1 100644
+--- a/node_modules/node-zklib/zklibtcp.js
++++ b/node_modules/node-zklib/zklibtcp.js
+@@ -111,22 +111,24 @@ class ZKLibTCP {
+       let timer = null
+       let replyBuffer = Buffer.from([])
+       const internalCallback = (data) => {
+-        this.socket.removeListener('data', handleOnData)
+-        timer && clearTimeout(timer)
+-        resolve(data)
++        if (this.socket) {
++          this.socket?.removeListener('data', handleOnData)
++          timer && clearTimeout(timer)
++          resolve(data)
++        }
+       }
+ 
+       const handleOnData = (data) => {
+         replyBuffer = Buffer.concat([replyBuffer, data])
+         if (checkNotEventTCP(data)) return;
+         clearTimeout(timer)
+-        const header = decodeTCPHeader(replyBuffer.subarray(0,16));
++        const header = decodeTCPHeader(replyBuffer.subarray(0, 16));
+ 
+-        if(header.commandId === COMMANDS.CMD_DATA){
+-          timer = setTimeout(()=>{
++        if (header.commandId === COMMANDS.CMD_DATA) {
++          timer = setTimeout(() => {
+             internalCallback(replyBuffer)
+           }, 1000)
+-        }else{
++        } else {
+           timer = setTimeout(() => {
+             reject(new Error('TIMEOUT_ON_RECEIVING_REQUEST_DATA'))
+           }, this.timeout)
+@@ -178,7 +180,7 @@ class ZKLibTCP {
+       const buf = createTCPHeader(command, this.sessionId, this.replyId, data)
+       let reply = null
+ 
+-      try{
++      try {
+         reply = await this.writeMessage(buf, command === COMMANDS.CMD_CONNECT || command === COMMANDS.CMD_EXIT)
+ 
+         const rReply = removeTcpHeader(reply);
+@@ -188,7 +190,7 @@ class ZKLibTCP {
+           }
+         }
+         resolve(rReply)
+-      }catch(err){
++      } catch (err) {
+         reject(err)
+       }
+     })
+@@ -328,7 +330,7 @@ class ZKLibTCP {
+   }
+ 
+ 
+-  async getSmallAttendanceLogs(){
++  async getSmallAttendanceLogs() {
+ 
+   }
+ 
+@@ -465,7 +467,7 @@ class ZKLibTCP {
+     }
+   }
+ 
+-  async clearAttendanceLog (){
++  async clearAttendanceLog() {
+     return await this.executeCmd(COMMANDS.CMD_CLEAR_ATTLOG, '')
+   }
+ 

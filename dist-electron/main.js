@@ -149,11 +149,47 @@ var DeviceLogger = class {
 };
 var deviceLogger = new DeviceLogger();
 
+// electron/zkTeco/helpers/createUserPacket.ts
+var import_buffer = require("buffer");
+function createUserPacket(user) {
+  const packet = import_buffer.Buffer.alloc(72);
+  packet.writeUInt16LE(user.uid, 0);
+  packet.writeUInt8(user.privilege ?? 0, 2);
+  packet.write((user.password ?? "").substring(0, 8), 3, "ascii");
+  packet.write(user.name.substring(0, 23), 11, "ascii");
+  packet.writeUInt32LE(user.card ?? 0, 35);
+  packet.writeUInt8(user.group ?? 1, 39);
+  packet.writeUInt16LE(0, 40);
+  packet.writeUInt16LE(0, 42);
+  packet.writeUInt16LE(0, 44);
+  packet.writeUInt16LE(0, 46);
+  packet.write(String(user.userId).substring(0, 8), 48, "ascii");
+  return packet;
+}
+
+// electron/zkTeco/helpers/createDeleteUserPacket.ts
+function createDeleteUserPacket(uid) {
+  const packet = Buffer.alloc(2);
+  packet.writeUInt16LE(uid, 0);
+  return packet;
+}
+
 // electron/zkTeco/ZKClient.ts
 var ZKClient = class {
   client = null;
   commandQueue = [];
   isProcessing = false;
+  isConnecting = false;
+  isDisconnecting = false;
+  connectionId = 0;
+  async withTimeout(promise, ms = 5e3) {
+    return Promise.race([
+      promise,
+      new Promise(
+        (_, reject) => setTimeout(() => reject(new Error("Operation timed out")), ms)
+      )
+    ]);
+  }
   async processQueue() {
     if (this.isProcessing) return;
     this.isProcessing = true;
@@ -163,6 +199,7 @@ var ZKClient = class {
         try {
           await cmd();
         } catch (err) {
+          deviceLogger.error("Queue command failed", err);
         }
       }
     }
@@ -170,53 +207,109 @@ var ZKClient = class {
   }
   queueCommand(cmd) {
     return new Promise((resolve, reject) => {
+      const connectionId = this.connectionId;
       this.commandQueue.push(async () => {
         try {
+          if (connectionId !== this.connectionId) {
+            throw new Error("Connection changed");
+          }
           const result = await cmd();
+          if (connectionId !== this.connectionId) {
+            throw new Error("Connection changed");
+          }
           resolve(result);
         } catch (err) {
           reject(err);
         }
       });
-      this.processQueue();
+      void this.processQueue();
     });
   }
   async connect(settings) {
-    if (this.client) {
-      try {
-        await this.client.disconnect();
-      } catch {
-      }
-      this.client = null;
+    if (this.isConnecting) {
+      throw new Error("Already connecting");
     }
-    this.client = new import_node_zklib.default(settings.ip, settings.port, settings.timeout, true);
-    await this.queueCommand(async () => {
-      await this.client.createSocket();
+    this.isConnecting = true;
+    try {
+      this.connectionId++;
+      if (this.client) {
+        try {
+          await this.withTimeout(this.client.disconnect(), 3e3);
+        } catch (err) {
+          deviceLogger.warn("Disconnect timeout", err);
+        } finally {
+          this.client = null;
+        }
+      }
+      this.commandQueue = [];
+      this.client = new import_node_zklib.default(
+        settings.ip,
+        settings.port,
+        settings.timeout,
+        true
+      );
+      try {
+        await this.withTimeout(
+          this.client.createSocket(),
+          settings.timeout + 2e3
+        );
+      } catch (error) {
+        this.client = null;
+        throw new Error(
+          `Failed to connect to ZKTeco device: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
       deviceLogger.info("Connected to ZKTeco device");
-    });
+    } finally {
+      this.isConnecting = false;
+    }
   }
   async disconnect() {
-    if (!this.client) return;
-    try {
-      await this.client.disconnect();
-      deviceLogger.info("Disconnected from ZKTeco device");
-    } catch {
+    if (this.isDisconnecting) {
+      return;
     }
-    this.client = null;
+    this.isDisconnecting = true;
+    try {
+      this.connectionId++;
+      this.commandQueue = [];
+      if (!this.client) {
+        return;
+      }
+      try {
+        await this.withTimeout(
+          this.client.disconnect(),
+          3e3
+        );
+        deviceLogger.info("Disconnected from ZKTeco device");
+      } catch (err) {
+        deviceLogger.warn("Disconnect timeout", err);
+      } finally {
+        this.client = null;
+      }
+    } finally {
+      this.isDisconnecting = false;
+    }
   }
   async testConnection() {
-    if (!this.client) throw new Error("Not connected to device");
-    const status = await this.client.getSocketStatus?.();
-    if (status !== void 0 && status !== null) {
-      return status;
+    if (!this.client) {
+      throw new Error("Not connected to device");
     }
-    await this.client.getInfo();
-    return true;
+    return this.queueCommand(async () => {
+      const status = await this.client.getSocketStatus?.();
+      if (status !== void 0 && status !== null) {
+        return status;
+      }
+      await this.withTimeout(
+        this.client.getInfo(),
+        5e3
+      );
+      return true;
+    });
   }
   async getDeviceInfo() {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const info = await this.client.getInfo();
+      const info = await this.withTimeout(this.client.getInfo(), 1e4);
       return {
         model: info?.model ?? void 0,
         serialNumber: info?.serialNumber ?? void 0,
@@ -230,7 +323,10 @@ var ZKClient = class {
   async getUsers() {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const res = await this.client.getUsers();
+      const res = await this.withTimeout(
+        this.client.getUsers(),
+        1e4
+      );
       return res?.data ?? [];
     });
   }
@@ -238,7 +334,10 @@ var ZKClient = class {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        const response = await this.client.getAttendances();
+        const response = await this.withTimeout(
+          this.client.getAttendances(),
+          15e3
+        );
         const logs = Array.isArray(response?.data) ? response.data : [];
         deviceLogger.info("Fetched attendance logs from device", { count: logs.length, sampleLog: logs[0] });
         return logs;
@@ -249,27 +348,61 @@ var ZKClient = class {
       }
     });
   }
-  async addUser(user) {
-    if (!this.client) throw new Error("Not connected to device");
+  async setUser(user) {
     return this.queueCommand(async () => {
-      deviceLogger.warn("addUser: node-zklib doesn't support setUser directly. Use executeCmd for user management.");
+      const packet = createUserPacket(user);
+      await this.withTimeout(
+        this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE),
+        5e3
+      );
+      try {
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_USER_WRQ, packet),
+          1e4
+        );
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_REFRESHDATA),
+          5e3
+        );
+      } catch (error) {
+        throw new Error(
+          `Failed to set user: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE),
+          5e3
+        );
+      }
     });
   }
+  async addUser(user) {
+    await this.setUser(user);
+  }
   async updateUser(user) {
-    if (!this.client) throw new Error("Not connected to device");
-    return this.addUser(user);
+    await this.setUser(user);
   }
   async deleteUser(userId) {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      deviceLogger.warn(`deleteUser: node-zklib doesn't support direct user deletion. UserId ${userId} was provided.`);
+      const packet = createDeleteUserPacket(userId);
+      await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DISABLEDEVICE), 5e3);
+      try {
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_DELETE_USER, packet), 1e4);
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_REFRESHDATA), 5e3);
+      } finally {
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_ENABLEDEVICE), 5e3);
+      }
     });
   }
   async clearAttendance() {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.client.clearAttendanceLog();
+        await this.withTimeout(
+          this.client.clearAttendanceLog(),
+          1e4
+        );
       } catch (error) {
         throw new Error(
           `Failed to clear attendance: ${error instanceof Error ? error.message : String(error)}`
@@ -281,7 +414,7 @@ var ZKClient = class {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
       try {
-        await this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from(""));
+        await this.withTimeout(this.client.executeCmd(COMMANDS.CMD_RESTART, Buffer.from("")), 5e3);
       } catch (error) {
         throw new Error(
           `Failed to restart device: ${error instanceof Error ? error.message : String(error)}`
@@ -290,17 +423,19 @@ var ZKClient = class {
     });
   }
   async executeCommand(cmd, payload) {
+    if (!this.client || this.isDisconnecting || this.isConnecting) {
+      throw new Error("Device is not ready");
+    }
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const res = await this.client.executeCmd(cmd, payload);
-      return res;
+      return await this.withTimeout(this.client.executeCmd(cmd, payload), 1e4);
     });
   }
   async getTime() {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const info = await this.client.getInfo();
-      return /* @__PURE__ */ new Date();
+      const time = await this.client.getTime();
+      return time;
     });
   }
 };
@@ -773,51 +908,12 @@ function roundToSeconds(d) {
 async function upsertAttendanceFromBiometric(args) {
   const { prisma: prisma2, member, logItem, deviceUserId } = args;
   const now = roundToSeconds(/* @__PURE__ */ new Date());
-  const sixHoursAgo = new Date(now);
-  sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
   const checkInTime = roundToSeconds(getAttendanceTimestamp(logItem));
   deviceLogger.info("Processing attendance log", {
     deviceUserId,
     memberId: member.id,
     checkInTime: checkInTime.toISOString()
   });
-  const activeSession = await prisma2.attendance.findFirst({
-    where: {
-      memberId: member.id,
-      checkOutTime: null,
-      checkInTime: { gte: sixHoursAgo }
-    },
-    orderBy: { checkInTime: "desc" }
-  });
-  if (activeSession) {
-    const secondsSinceCheckIn = Math.abs(
-      checkInTime.getTime() - new Date(activeSession.checkInTime).getTime()
-    ) / 1e3;
-    if (secondsSinceCheckIn <= 30) {
-      deviceLogger.info("Duplicate check-in detected (within 30s), skipping checkout", {
-        deviceUserId,
-        memberId: member.id,
-        secondsSinceCheckIn
-      });
-      return { ipcEvent: "attendance:checkin", attendance: activeSession };
-    }
-    const alreadyClosedWithin1s = activeSession.checkOutTime != null && Math.abs(
-      new Date(activeSession.checkOutTime).getTime() - checkInTime.getTime()
-    ) <= 1e3;
-    if (!alreadyClosedWithin1s) {
-      const updated = await prisma2.attendance.update({
-        where: { id: activeSession.id },
-        data: { checkOutTime: checkInTime, method: "BIOMETRIC" }
-      });
-      deviceLogger.info("Attendance checked out", {
-        deviceUserId,
-        memberId: member.id,
-        checkOutTime: checkInTime.toISOString()
-      });
-      return { ipcEvent: "attendance:checkout", attendance: updated };
-    }
-    return { ipcEvent: "attendance:checkout", attendance: activeSession };
-  }
   const nearDuplicate = await prisma2.attendance.findFirst({
     where: {
       memberId: member.id,
@@ -880,8 +976,6 @@ function roundToSeconds2(d) {
 async function upsertTrainerAttendanceFromBiometric(args) {
   const { prisma: prisma2, trainer, logItem, deviceUserId } = args;
   const now = roundToSeconds2(/* @__PURE__ */ new Date());
-  const twelveHoursAgo = new Date(now);
-  twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
   const checkInTime = roundToSeconds2(getAttendanceTimestamp2(logItem));
   deviceLogger.info("Processing trainer attendance log", {
     deviceUserId,
@@ -889,43 +983,6 @@ async function upsertTrainerAttendanceFromBiometric(args) {
     checkInTime: checkInTime.toISOString(),
     rawTimestamp: logItem.timestamp ?? logItem.attTime
   });
-  const activeSession = await prisma2.trainerAttendance.findFirst({
-    where: {
-      trainerId: trainer.id,
-      checkOutTime: null,
-      checkInTime: { gte: twelveHoursAgo }
-    },
-    orderBy: { checkInTime: "desc" }
-  });
-  if (activeSession) {
-    const secondsSinceCheckIn = Math.abs(
-      checkInTime.getTime() - new Date(activeSession.checkInTime).getTime()
-    ) / 1e3;
-    if (secondsSinceCheckIn <= 30) {
-      deviceLogger.info("Duplicate check-in detected (within 30s), skipping checkout", {
-        deviceUserId,
-        trainerId: trainer.id,
-        secondsSinceCheckIn
-      });
-      return { ipcEvent: "trainerAttendance:checkin", attendance: activeSession };
-    }
-    const alreadyClosedWithin1s = activeSession.checkOutTime != null && Math.abs(
-      new Date(activeSession.checkOutTime).getTime() - checkInTime.getTime()
-    ) <= 1e3;
-    if (!alreadyClosedWithin1s) {
-      const updated = await prisma2.trainerAttendance.update({
-        where: { id: activeSession.id },
-        data: { checkOutTime: checkInTime, method: "BIOMETRIC" }
-      });
-      deviceLogger.info("Trainer attendance checked out", {
-        deviceUserId,
-        trainerId: trainer.id,
-        checkOutTime: checkInTime.toISOString()
-      });
-      return { ipcEvent: "trainerAttendance:checkout", attendance: updated };
-    }
-    return { ipcEvent: "trainerAttendance:checkout", attendance: activeSession };
-  }
   const nearDuplicate = await prisma2.trainerAttendance.findFirst({
     where: {
       trainerId: trainer.id,
@@ -2105,23 +2162,7 @@ function registerAttendanceHandlers(ipcMain2, prisma2) {
     });
   });
   ipcMain2.handle("attendance:getActiveSession", async (_, memberId) => {
-    const sixHoursAgo = /* @__PURE__ */ new Date();
-    sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
-    const staleSessions = await prisma2.attendance.findMany({
-      where: { memberId, checkOutTime: null, checkInTime: { lt: sixHoursAgo } }
-    });
-    for (const session of staleSessions) {
-      const autoCheckOutTime = new Date(session.checkInTime);
-      autoCheckOutTime.setHours(autoCheckOutTime.getHours() + 6);
-      await prisma2.attendance.update({
-        where: { id: session.id },
-        data: { checkOutTime: autoCheckOutTime }
-      });
-    }
-    return await prisma2.attendance.findFirst({
-      where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },
-      orderBy: { checkInTime: "desc" }
-    });
+    return null;
   });
   ipcMain2.handle("attendance:manualEntry", async (_, memberId) => {
     const member = await prisma2.member.findUnique({ where: { id: memberId } });
@@ -2130,26 +2171,13 @@ function registerAttendanceHandlers(ipcMain2, prisma2) {
     if (!validation.allowed) {
       throw new Error(validation.reason || "Check-in not allowed");
     }
-    const sixHoursAgo = /* @__PURE__ */ new Date();
-    sixHoursAgo.setHours(sixHoursAgo.getHours() - 6);
-    const activeSession = await prisma2.attendance.findFirst({
-      where: { memberId, checkOutTime: null, checkInTime: { gte: sixHoursAgo } },
-      orderBy: { checkInTime: "desc" }
+    return await prisma2.attendance.create({
+      data: {
+        memberId,
+        checkInTime: /* @__PURE__ */ new Date(),
+        method: "MANUAL"
+      }
     });
-    if (activeSession) {
-      return await prisma2.attendance.update({
-        where: { id: activeSession.id },
-        data: { checkOutTime: /* @__PURE__ */ new Date() }
-      });
-    } else {
-      return await prisma2.attendance.create({
-        data: {
-          memberId,
-          checkInTime: /* @__PURE__ */ new Date(),
-          method: "MANUAL"
-        }
-      });
-    }
   });
 }
 
@@ -2162,43 +2190,14 @@ function registerTrainerAttendanceHandlers(ipcMain2, prisma2) {
     });
   });
   ipcMain2.handle("trainerAttendance:getActiveSession", async (_, trainerId) => {
-    const twelveHoursAgo = /* @__PURE__ */ new Date();
-    twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
-    const stale = await prisma2.trainerAttendance.findMany({
-      where: { trainerId, checkOutTime: null, checkInTime: { lt: twelveHoursAgo } }
-    });
-    for (const s of stale) {
-      const autoOut = new Date(s.checkInTime);
-      autoOut.setHours(autoOut.getHours() + 12);
-      await prisma2.trainerAttendance.update({
-        where: { id: s.id },
-        data: { checkOutTime: autoOut }
-      });
-    }
-    return await prisma2.trainerAttendance.findFirst({
-      where: { trainerId, checkOutTime: null, checkInTime: { gte: twelveHoursAgo } },
-      orderBy: { checkInTime: "desc" }
-    });
+    return null;
   });
   ipcMain2.handle("trainerAttendance:manualEntry", async (_, trainerId) => {
-    const twelveHoursAgo = /* @__PURE__ */ new Date();
-    twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
     const trainer = await prisma2.trainer.findUnique({ where: { id: trainerId } });
     if (!trainer) throw new Error("Trainer not found");
-    const activeSession = await prisma2.trainerAttendance.findFirst({
-      where: { trainerId, checkOutTime: null, checkInTime: { gte: twelveHoursAgo } },
-      orderBy: { checkInTime: "desc" }
+    return await prisma2.trainerAttendance.create({
+      data: { trainerId, checkInTime: /* @__PURE__ */ new Date(), method: "MANUAL" }
     });
-    if (activeSession) {
-      return await prisma2.trainerAttendance.update({
-        where: { id: activeSession.id },
-        data: { checkOutTime: /* @__PURE__ */ new Date() }
-      });
-    } else {
-      return await prisma2.trainerAttendance.create({
-        data: { trainerId, checkInTime: /* @__PURE__ */ new Date(), method: "MANUAL" }
-      });
-    }
   });
 }
 

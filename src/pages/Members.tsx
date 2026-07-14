@@ -114,6 +114,7 @@ export default function Members() {
     try {
       const res = await (window as any).api.members.getDeviceSyncStatus();
       if (res?.success && Array.isArray(res.data)) {
+        console.log("Device sync status:", res.data);
         const map: Record<
           string,
           {
