@@ -1,0 +1,45 @@
+appId: com.gymflow.desktop
+productName: GymFlow
+copyright: "Copyright © 2026 Khubaib Shah"
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+
+extraResources:
+  - from: prisma/dev.db
+    to: dev.db
+  - from: prisma/schema.prisma
+    to: schema.prisma
+
+asarUnpack:
+  - "**/*.node"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: "GymFlow-${version}-Setup.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: GymFlow
+  deleteAppDataOnUninstall: false
+
+npmRebuild: false
+nodeGypRebuild: false
+compression: normal
+publish: null
+
+# Explicitly set electron version to avoid npm list scan
+electronVersion: 42.6.1
+

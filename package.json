@@ -12,52 +12,8 @@
     "build:web": "vite build",
     "build:electron": "tsup",
     "package": "electron-builder",
-    "dist": "npm run build:web && npm run build:electron && node safe-build.js"
-  },
-  "build": {
-    "appId": "com.gymflow.desktop",
-    "productName": "Gymflow",
-    "icon": "build/icon.ico",
-    "copyright": "Copyright © 2026 Khubaib Shah",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "node_modules/@prisma/client/**/*",
-      "node_modules/.prisma/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "prisma/dev.db",
-        "to": "dev.db"
-      }
-    ],
-    "asarUnpack": [
-      "**/*.node",
-      "node_modules/.prisma/**/*",
-      "node_modules/@prisma/**/*"
-    ],
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "GymFlow",
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
-      "installerHeaderIcon": "build/icon.ico"
-    },
-    "win": {
-      "target": "nsis",
-      "artifactName": "GymFlow-${version}-Setup.${ext}",
-      "executableName": "GymFlow",
-      "publisherName": "Khubaib Shah"
-    },
-    "compression": "maximum",
-    "publish": null
+    "dist": "npm run build:web && npm run build:electron && node safe-build.js",
+    "build": "node safe-build.js"
   },
   "main": "dist-electron/main.js",
   "dependencies": {
