@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 
-const VALID_PASSWORDS = ['12345678', 'gymflow'];
+const VALID_PASSWORDS = ['2008', 'gymflow'];
 
 export default function Reports() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -45,8 +45,8 @@ export default function Reports() {
 
     const d = new Date(dateString);
     const today = new Date();
-    today.setHours(0,0,0,0);
-    
+    today.setHours(0, 0, 0, 0);
+
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
@@ -65,9 +65,9 @@ export default function Reports() {
       return d.getMonth() === lastMonth.getMonth() && d.getFullYear() === lastMonth.getFullYear();
     } else if (dateFilter === 'custom' && customDate) {
       const custom = new Date(customDate);
-      return d.getDate() === custom.getDate() && 
-             d.getMonth() === custom.getMonth() && 
-             d.getFullYear() === custom.getFullYear();
+      return d.getDate() === custom.getDate() &&
+        d.getMonth() === custom.getMonth() &&
+        d.getFullYear() === custom.getFullYear();
     }
     return true;
   };
@@ -80,7 +80,7 @@ export default function Reports() {
 
   // 1. Revenue
   const totalRevenue = filteredPayments.reduce((sum, p) => sum + p.amount, 0);
-  
+
   // Revenue by Method — only CASH and ONLINE
   const METHODS = ['CASH', 'ONLINE'];
   const revByMethodMap = filteredPayments.reduce((acc, p) => {
@@ -93,7 +93,7 @@ export default function Reports() {
     .map(m => ({ name: m, value: revByMethodMap[m] }));
 
   // Revenue Over Time (Last 7 Days)
-  const last7Days = Array.from({length: 7}).map((_, i) => {
+  const last7Days = Array.from({ length: 7 }).map((_, i) => {
     const d = new Date();
     d.setDate(d.getDate() - (6 - i));
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -154,11 +154,11 @@ export default function Reports() {
     }
     const rows = filteredPayments.map(p => ({
       'Member Name': p.member ? `${p.member.firstName} ${p.member.lastName}` : 'N/A',
-      'Phone':       p.member?.phone || 'N/A',
+      'Phone': p.member?.phone || 'N/A',
       'Amount (Rs)': p.amount,
-      'Method':      p.method,
-      'Date':        new Date(p.paymentDate).toLocaleDateString(),
-      'Notes':       p.notes || '',
+      'Method': p.method,
+      'Date': new Date(p.paymentDate).toLocaleDateString(),
+      'Notes': p.notes || '',
     }));
     const headers = Object.keys(rows[0]);
     const csvContent = [
@@ -218,9 +218,9 @@ export default function Reports() {
                 />
                 <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-500 hover:text-gray-300 transition-colors" tabIndex={-1}>
                   {showPassword ? (
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242"/></svg>
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242" /></svg>
                   ) : (
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                   )}
                 </button>
               </div>
@@ -252,7 +252,7 @@ export default function Reports() {
         </div>
         <div className="flex gap-3">
           <div className="flex gap-2 bg-[#0f1115] border border-[#2a2e37] rounded-lg overflow-hidden p-1 mr-2">
-            <select 
+            <select
               className="bg-transparent text-white text-sm border-none focus:ring-0 cursor-pointer outline-none pl-2"
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value)}
@@ -266,15 +266,15 @@ export default function Reports() {
               <option value="all">All Time</option>
             </select>
             {dateFilter === 'custom' && (
-              <input 
-                type="date" 
+              <input
+                type="date"
                 className="bg-transparent text-white text-sm border-l border-[#2a2e37] pl-2 outline-none"
                 value={customDate}
                 onChange={(e) => setCustomDate(e.target.value)}
               />
             )}
           </div>
-          
+
           <button onClick={exportRevenue} className="btn-secondary flex items-center gap-2">
             Export Revenue
           </button>
@@ -299,7 +299,7 @@ export default function Reports() {
           <p className="text-sm font-medium text-gray-400 print:text-gray-600">Revenue {dateFilter === 'all' ? '(Lifetime)' : '(Period)'}</p>
           <h3 className="text-4xl font-bold text-green-500 mt-2">Rs {totalRevenue.toFixed(2)}</h3>
         </div>
-        
+
         {/* Total Members */}
         <div className="glass print:border-gray-200 print:bg-white p-6 rounded-xl border border-[#2a2e37] shadow-lg">
           <p className="text-sm font-medium text-gray-400 print:text-gray-600">Members {dateFilter === 'all' ? '(Total)' : '(Joined in Period)'}</p>
@@ -323,8 +323,8 @@ export default function Reports() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#2a2e37" vertical={false} />
                 <XAxis dataKey="date" stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} />
                 <YAxis stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `Rs ${val}`} />
-                <Tooltip cursor={{stroke: '#2a2e37', strokeWidth: 1}} contentStyle={{backgroundColor: '#13151a', borderColor: '#2a2e37', borderRadius: '8px', color: 'white'}} itemStyle={{color: '#e5e7eb'}} />
-                <Line type="monotone" dataKey="revenue" stroke="#22c55e" strokeWidth={3} dot={{r: 4, fill: '#22c55e', strokeWidth: 0}} activeDot={{r: 6}} />
+                <Tooltip cursor={{ stroke: '#2a2e37', strokeWidth: 1 }} contentStyle={{ backgroundColor: '#13151a', borderColor: '#2a2e37', borderRadius: '8px', color: 'white' }} itemStyle={{ color: '#e5e7eb' }} />
+                <Line type="monotone" dataKey="revenue" stroke="#22c55e" strokeWidth={3} dot={{ r: 4, fill: '#22c55e', strokeWidth: 0 }} activeDot={{ r: 6 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -339,7 +339,7 @@ export default function Reports() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#2a2e37" vertical={false} />
                 <XAxis dataKey="date" stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} />
                 <YAxis stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} />
-                <Tooltip cursor={{fill: '#2a2e37'}} contentStyle={{backgroundColor: '#13151a', borderColor: '#2a2e37', borderRadius: '8px', color: 'white'}} itemStyle={{color: '#e5e7eb'}} />
+                <Tooltip cursor={{ fill: '#2a2e37' }} contentStyle={{ backgroundColor: '#13151a', borderColor: '#2a2e37', borderRadius: '8px', color: 'white' }} itemStyle={{ color: '#e5e7eb' }} />
                 <Bar dataKey="checkins" fill="#6366f1" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -361,14 +361,14 @@ export default function Reports() {
                     <Cell key={`cell-${entry.name}`} fill={METHOD_COLORS[entry.name] || '#6366f1'} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{backgroundColor: '#13151a', borderColor: '#2a2e37', borderRadius: '8px', color: 'white'}} itemStyle={{color: '#e5e7eb'}} formatter={(val) => `Rs ${Number(val).toFixed(2)}`} />
+                <Tooltip contentStyle={{ backgroundColor: '#13151a', borderColor: '#2a2e37', borderRadius: '8px', color: 'white' }} itemStyle={{ color: '#e5e7eb' }} formatter={(val) => `Rs ${Number(val).toFixed(2)}`} />
               </PieChart>
             </ResponsiveContainer>
           )}
           <div className="flex gap-4 mt-2">
             {revenueByMethod.map((entry) => (
               <div key={entry.name} className="flex items-center gap-1.5 text-xs text-gray-400">
-                <div className="w-3 h-3 rounded-full" style={{backgroundColor: METHOD_COLORS[entry.name] || '#6366f1'}}></div>
+                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: METHOD_COLORS[entry.name] || '#6366f1' }}></div>
                 {entry.name}: Rs {entry.value.toFixed(2)}
               </div>
             ))}
