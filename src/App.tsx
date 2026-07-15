@@ -23,75 +23,57 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; type: string } | null>(
     null,
   );
-  const [expiredMember, setExpiredMember] = useState<any>(null);
+  const [problemMember, setProblemMember] = useState<{ member: any; type: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     // Listen for real-time device attendance events
     const api = (window as any).api;
     let cleanupListeners: (() => void) | undefined;
     let toastTimer: ReturnType<typeof setTimeout> | null = null;
-    let audioCtx: AudioContext | null = null;
 
     if (api?.device?.onAttendanceEvent) {
-      cleanupListeners = api.device.onAttendanceEvent(
-        (type: string, data: any) => {
-          const memberName =
-            `${data.member?.firstName || ""} ${data.member?.lastName || ""}`.trim() ||
-            "Member";
-          let msg = "";
-          if (type === "checkin") msg = `Welcome, ${memberName}`;
-          else if (type === "expired")
-            msg = `Dear ${memberName}, your subscription has expired. Please renew your membership.`;
-          else if (type === "inactive")
-            msg = `Dear ${memberName}, your membership has been suspended. Please contact reception.`;
-          else if (type === "unknown")
-            msg = `Member not found. Please contact reception.`;
+      const handleAttendanceEvent = (type: string, data: any) => {
+        const memberName =
+          `${data.member?.firstName || ""} ${data.member?.lastName || ""}`.trim() ||
+          "Member";
+        let msg = "";
+        if (type === "checkin") msg = `Welcome, ${memberName}`;
+        else if (type === "expired")
+          msg = `Dear ${memberName}, your subscription has expired. Please renew your membership.`;
+        else if (type === "inactive")
+          msg = `Dear ${memberName}, your membership has been suspended. Please contact reception.`;
 
-          if (msg) {
-            // Show Toast
-            setToast({
-              message: msg,
-              type: type === "checkin" ? "success" : "error",
-            });
-            // Clear any existing toast timer before setting a new one
-            if (toastTimer) clearTimeout(toastTimer);
-            toastTimer = setTimeout(() => setToast(null), 5000);
+        if (msg) {
+          // Show Toast
+          setToast({
+            message: msg,
+            type: type === "checkin" ? "success" : "error",
+          });
+          // Clear any existing toast timer before setting a new one
+          if (toastTimer) clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => setToast(null), 5000);
 
-            if (type === "expired" && data.member) {
-              setExpiredMember(data.member);
-              // Voice pronounce the expiry
-              const expiryDate = data.member.membershipEnd
-                ? new Date(data.member.membershipEnd).toLocaleDateString(
-                    "en-US",
-                    { month: "long", day: "numeric" },
-                  )
-                : "an earlier date";
-              const memberName =
-                `${data.member.firstName || ""} ${data.member.lastName || ""}`.trim();
-              const speech = new SpeechSynthesisUtterance(
-                `${memberName}, your membership expired on ${expiryDate}. Please upgrade your plan.`,
-              );
-              speech.rate = 0.95;
-              speech.pitch = 1;
-              window.speechSynthesis.cancel();
-              window.speechSynthesis.speak(speech);
-            } else if (type === "inactive" || type === "unknown") {
-              // Beep for non-expired blocked events
-              try {
-                audioCtx = new (
-                  window.AudioContext || (window as any).webkitAudioContext
-                )();
-                const osc = audioCtx.createOscillator();
-                osc.type = "sine";
-                osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-                osc.connect(audioCtx.destination);
-                osc.start();
-                osc.stop(audioCtx.currentTime + 0.3);
-              } catch (e) {}
-            }
+          // Speech Synthesis
+          const speech = new SpeechSynthesisUtterance(msg);
+          const voices = speechSynthesis.getVoices();
+          speech.voice = voices[2];
+          speech.rate = 0.95;
+          speech.pitch = 1;
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(speech);
+
+          if ((type === "expired" || type === "inactive") && data.member) {
+            setProblemMember({ member: data.member, type });
           }
-        },
-      );
+        }
+      };
+
+      // Expose to window for easy testing via DevTools console
+      (window as any).simulateAttendanceEvent = handleAttendanceEvent;
+
+      cleanupListeners = api.device.onAttendanceEvent(handleAttendanceEvent);
     }
 
     // Check if the initial owner exists
@@ -130,8 +112,6 @@ export default function App() {
       if (toastTimer) clearTimeout(toastTimer);
       // Cancel any ongoing speech
       window.speechSynthesis.cancel();
-      // Close AudioContext if created
-      if (audioCtx) audioCtx.close().catch(() => {});
     };
   }, [isAuthenticated]);
 
@@ -193,11 +173,10 @@ export default function App() {
         </Routes>
         {toast && (
           <div
-            className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg border transition-all transform duration-300 ${
-              toast.type === "error"
-                ? "bg-red-900/90 border-red-500 text-white"
-                : "bg-emerald-900/90 border-emerald-500 text-white"
-            }`}
+            className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg border transition-all transform duration-300 ${toast.type === "error"
+              ? "bg-red-900/90 border-red-500 text-white"
+              : "bg-emerald-900/90 border-emerald-500 text-white"
+              }`}
           >
             <div className="flex items-center gap-3">
               {toast.type === "error" ? (
@@ -233,14 +212,14 @@ export default function App() {
             </div>
           </div>
         )}
-        {expiredMember && (
+        {problemMember && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
             <div className="glass w-full max-w-md rounded-2xl p-6 border border-red-500/30 shadow-2xl relative text-center">
               {/* Close button - top right */}
               <button
                 onClick={() => {
                   window.speechSynthesis.cancel();
-                  setExpiredMember(null);
+                  setProblemMember(null);
                 }}
                 className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-full bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-all"
               >
@@ -275,23 +254,23 @@ export default function App() {
                 </svg>
               </div>
               <h2 className="text-2xl font-bold text-white mb-2">
-                Membership Expired
+                {problemMember.type === "expired" ? "Membership Expired" : "Membership Suspended"}
               </h2>
               <p className="text-gray-300 mb-6">
                 <span className="font-semibold text-white">
-                  {expiredMember.firstName} {expiredMember.lastName}
+                  {problemMember.member.firstName} {problemMember.member.lastName}
                 </span>
                 , your{" "}
-                {expiredMember.plan?.name ? (
+                {problemMember.member.plan?.name ? (
                   <span className="font-semibold text-white">
-                    {expiredMember.plan?.name}
+                    {problemMember.member.plan?.name}
                   </span>
                 ) : (
                   ""
                 )}{" "}
-                membership expired on{" "}
+                membership {problemMember.type === "expired" ? "expired on" : "was suspended on"}{" "}
                 <span className="font-semibold text-red-400">
-                  {new Date(expiredMember.membershipEnd).toLocaleDateString(
+                  {new Date(problemMember.member.membershipEnd).toLocaleDateString(
                     "en-US",
                     { month: "long", day: "numeric" },
                   )}
@@ -302,7 +281,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     window.speechSynthesis.cancel();
-                    setExpiredMember(null);
+                    setProblemMember(null);
                   }}
                   className="btn-secondary flex-1"
                 >
@@ -310,9 +289,9 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    const id = expiredMember.id;
+                    const id = problemMember.member.id;
                     window.speechSynthesis.cancel();
-                    setExpiredMember(null);
+                    setProblemMember(null);
                     navigate(`/members?renew=${id}`);
                   }}
                   className="btn-primary flex-1 bg-red-600 hover:bg-red-500 shadow-lg shadow-red-500/20 border-red-500"

@@ -31,11 +31,18 @@ export interface DeviceInfoPayload {
 
 export interface DeviceAttendancePayload {
   id?: string;
-  userId?: number;
+  deviceLogId?: number;  // Alias for id - the unique record ID from the device
+  userId?: number;       // User ID (employee number)
   uid?: number;
+  userSn?: number;       // Device internal serial number
+  recordTime?: Date | string;  // The actual field returned by ZKTeco device
   timestamp?: Date | string;
   deviceUserId?: number;
   ip?: string;
+  method?: string;
+  attTime?: Date | string;
+  checkInTime?: Date | string;
+  date?: Date | string;
   [key: string]: any;
 }
 
@@ -54,6 +61,8 @@ export interface DeviceUserPayload {
   startDate?: string;
   endDate?: string;
   cardNo?: number;
+  templates?: any[];
+  fingerprints?: any[];
   [key: string]: any;
 }
 

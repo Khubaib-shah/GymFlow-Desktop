@@ -7,6 +7,19 @@ import { deviceSettingsStore } from './DeviceSettings';
 import type { DeviceAttendancePayload, DeviceInfoPayload, DeviceStatusPayload, DeviceUserPayload, ZkTecoDeviceSettings } from './types';
 import { createStructuredError, toErrorMessage } from './utils';
 import { deviceLogger } from './DeviceLogger';
+// Helpers
+import { recordDeviceAttendanceLog, isAttendanceLogProcessed } from './helpers/attendanceTracking';
+
+/**
+ * Round a Date to second-level precision for reliable dedup keys.
+ * ZKTeco device timestamps are second-resolution; this ensures
+ * consistent comparison across reads.
+ */
+function roundToSeconds(d: Date): Date {
+  const copy = new Date(d.getTime());
+  copy.setMilliseconds(0);
+  return copy;
+}
 
 export class DeviceManager extends EventEmitter {
   private client = new ZKClient();
@@ -15,23 +28,40 @@ export class DeviceManager extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private lastConnectedAt: string | null = null;
-  private lastAttendanceFingerprint = new Set<string>();
-  private isFirstPoll = true;
   private isReconnecting = false;
   private consecutiveFailures = 0;
   /** Tracks whether initial sync has been done */
   private initialSyncDone = false;
-  /** Tracks if we're in initial sync mode (polling disabled) */
-  private skipPolling = true;
-  /** Tracks the last emitted status message to avoid duplicate status events */
-  private lastStatusEmitHash: string | null = null;
   /** Prevents timer callbacks from running after disconnect/cleanup */
   private disposed = false;
+  /** Guards against overlapping poll cycles */
+  private isPolling = false;
+  /** Reference to prisma for persistent tracking - set by the app on startup */
+  private prisma: any = null;
+  /** In-memory set of already-seen attendance keys (userId:roundedTimestamp) to avoid redundant DB checks */
+  private processedKeys: Set<string> = new Set();
+
+  /**
+   * Clear in-memory caches and reset state.
+   * Useful when resetting the application database.
+   */
+  clearCache(): void {
+    this.processedKeys.clear();
+    this.initialSyncDone = false;
+  }
 
   constructor() {
     super();
     // Prevent MaxListenersExceededWarning - the bridge registers 'attendance' and 'status' listeners
     this.setMaxListeners(20);
+  }
+
+  /**
+   * Set the Prisma client reference for database-based tracking.
+   * This should be called during app initialization.
+   */
+  setPrismaClient(prisma: any): void {
+    this.prisma = prisma;
   }
 
   async applySettings(settings: Partial<ZkTecoDeviceSettings>): Promise<ZkTecoDeviceSettings> {
@@ -55,6 +85,20 @@ export class DeviceManager extends EventEmitter {
       this.consecutiveFailures = 0;
       this.lastConnectedAt = new Date().toISOString();
       this.emitStatusOnce('connected', 'Connected successfully');
+
+      // Register for real-time events after successful connection
+      try {
+        this.client.startRealTimeLogs((record) => {
+          // Process real-time attendance event immediately
+          this.processRealTimeAttendance(record).catch((err) => {
+            deviceLogger.error('Real-time attendance processing error', err);
+          });
+        });
+      } catch (rtErr) {
+        // Real-time event registration is optional; polling will still work
+        deviceLogger.warn('Real-time event registration failed, falling back to polling', rtErr);
+      }
+
       return this.buildStatus('connected', 'Connected successfully');
     } catch (error) {
       this.connected = false;
@@ -70,13 +114,17 @@ export class DeviceManager extends EventEmitter {
     if (this.reconnectTimer) clearInterval(this.reconnectTimer);
     this.pollTimer = null;
     this.reconnectTimer = null;
+    this.client.stopRealTimeLogs();
     await this.client.disconnect();
     this.connected = false;
     this.emitStatusOnce('disconnected', 'Device disconnected');
   }
 
   async reconnect(): Promise<DeviceStatusPayload> {
-    await this.disconnect();
+    this.disposed = false;
+    this.client.stopRealTimeLogs();
+    await this.client.disconnect();
+    this.connected = false;
     return this.connect();
   }
 
@@ -84,7 +132,6 @@ export class DeviceManager extends EventEmitter {
     try {
       const status = await this.connect();
       const info = await this.getDeviceInfo();
-      // Log full device info to help diagnose missing firmware fields
       try {
         deviceLogger.info('Device info retrieved', info);
       } catch {
@@ -143,7 +190,6 @@ export class DeviceManager extends EventEmitter {
     try {
       await this.client.addUser(user);
     } catch (error) {
-      // rethrow as DeviceError so createStructuredError can surface details
       throw new DeviceError(toErrorMessage(error));
     }
   }
@@ -186,7 +232,6 @@ export class DeviceManager extends EventEmitter {
 
   /**
    * Poll the device for a user's fingerprint/templates until detected or timeout.
-   * Returns true if templates were detected, false on timeout.
    */
   async waitForEnrollment(employeeNo: number, timeoutMs = 60000, intervalMs = 2000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
@@ -198,7 +243,6 @@ export class DeviceManager extends EventEmitter {
           return String(uid) === String(employeeNo);
         });
         if (user) {
-          // Heuristics for fingerprint/template presence
           const hasTemplates = Array.isArray(user.templates) && user.templates.length > 0;
           const hasFingerprints = Array.isArray(user.fingerprints) && user.fingerprints.length > 0;
           const hasTemplateFields = Object.keys(user).some(k => /template|finger|fp/i.test(k) && (Array.isArray((user as any)[k]) ? (user as any)[k].length > 0 : Boolean((user as any)[k])));
@@ -212,12 +256,102 @@ export class DeviceManager extends EventEmitter {
     return false;
   }
 
+  /**
+   * Process a real-time attendance event from the device.
+   * The device pushes these immediately when a fingerprint is scanned.
+   */
+  private async processRealTimeAttendance(record: { userId: string; attTime: Date }): Promise<void> {
+    const deviceUserId = Number(record.userId);
+    if (Number.isNaN(deviceUserId)) return;
+
+    const checkInTime = roundToSeconds(record.attTime);
+    const key = this.makeKey(deviceUserId, checkInTime);
+
+    // Skip if already processed in this session
+    if (this.processedKeys.has(key)) return;
+
+    this.processedKeys.add(key);
+
+    // Record in persistent tracking table
+    if (this.prisma) {
+      try {
+        await recordDeviceAttendanceLog({
+          prisma: this.prisma,
+          deviceUserId,
+          deviceLogId: null,
+          checkInTime,
+          method: "BIOMETRIC",
+        });
+      } catch {
+        // ignore duplicate errors
+      }
+    }
+
+    // Map to the DeviceAttendancePayload format the bridge expects
+    const logItem: DeviceAttendancePayload = {
+      deviceUserId,
+      userId: deviceUserId,
+      recordTime: checkInTime,
+      attTime: checkInTime,
+      method: "BIOMETRIC",
+    };
+
+    // Emit to bridge for processing
+    this.emit('attendance', [logItem], false);
+
+    deviceLogger.info("Real-time attendance event", {
+      deviceUserId,
+      checkInTime: checkInTime.toISOString(),
+    });
+  }
+
+  /**
+   * Extract the timestamp from a device attendance log item.
+   * Returns a Date rounded to seconds for consistent dedup.
+   */
+  private getLogTimestamp(log: DeviceAttendancePayload): Date {
+    const raw = log.recordTime ?? log.timestamp ?? log.attTime ?? log.checkInTime ?? log.date;
+    if (raw == null) return new Date();
+    if (raw instanceof Date) return roundToSeconds(raw);
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? new Date() : roundToSeconds(d);
+  }
+
+  /**
+   * Extract the device user ID from a log item.
+   */
+  private getLogDeviceUserId(log: DeviceAttendancePayload): number | null {
+    const raw = log.userId ?? log.uid ?? log.deviceUserId ?? log.userSn;
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isNaN(n) ? null : n;
+  }
+
+  /**
+   * Build a fast deduplication key from deviceUserId + rounded timestamp.
+   * Example: "123:1763280000"
+   */
+  private makeKey(deviceUserId: number, checkInTime: Date): string {
+    return `${deviceUserId}:${Math.floor(checkInTime.getTime() / 1000)}`;
+  }
+
+  /** Build a key from a log item */
+  private getLogKey(log: DeviceAttendancePayload): string {
+    const deviceUserId = this.getLogDeviceUserId(log) ?? 0;
+    const checkInTime = this.getLogTimestamp(log);
+    return this.makeKey(deviceUserId, checkInTime);
+  }
+
   startAutoLifecycle(): void {
     const settings = this.getSettings();
     if (!settings.enabled || !settings.ip) return;
-    // Reset the status emit hash so lifecycle events are always emitted fresh
-    this.lastStatusEmitHash = null;
-    this.initializeAttendanceFingerprint();
+    // Reset state for fresh start
+    this.initialSyncDone = false;
+    this.consecutiveFailures = 0;
+    this.connected = false;
+    this.disposed = false;
+    // Clear in-memory cache so we start fresh
+    this.processedKeys.clear();
     this.startPolling();
     this.scheduleReconnect();
   }
@@ -226,7 +360,6 @@ export class DeviceManager extends EventEmitter {
    * Sync all existing attendance records from the device.
    * This is called after the app starts to fetch attendance that was recorded
    * while the application was closed. It emits events for the bridge to process.
-   * On first call, it processes ALL logs (not just new ones).
    */
   async syncAttendance(): Promise<{ success: boolean; data?: { total: number }; error?: string }> {
     if (!this.connected) {
@@ -240,129 +373,144 @@ export class DeviceManager extends EventEmitter {
     try {
       const logs = await this.client.getAttendance();
 
-      // On first sync (startup), process ALL logs to catch up with attendance
-      // recorded while the app was closed. Otherwise, only process new logs.
-      let logsToProcess: any[];
-      if (!this.initialSyncDone) {
-        // First sync: process all logs (polling was skipped, so nothing to filter)
-        logsToProcess = logs;
-        this.initialSyncDone = true;
-        this.skipPolling = false; // Enable polling after initial sync
-      } else {
-        // Subsequent syncs: only process logs not already seen
-        logsToProcess = logs.filter((log: any) => {
-          const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
-          return !this.lastAttendanceFingerprint.has(key);
-        });
+      // Filter out logs that have already been processed (persistent deduplication)
+      const unprocessedLogs: DeviceAttendancePayload[] = [];
+
+      for (const log of logs) {
+        const deviceUserId = this.getLogDeviceUserId(log);
+        if (deviceUserId == null) continue;
+
+        const checkInTime = this.getLogTimestamp(log);
+
+        // Check in-memory set first (fast)
+        const key = this.makeKey(deviceUserId, checkInTime);
+        if (this.processedKeys.has(key)) continue;
+
+        // Check database (persistent dedup)
+        let isProcessed = false;
+        if (this.prisma) {
+          isProcessed = await isAttendanceLogProcessed({
+            prisma: this.prisma,
+            deviceUserId,
+            deviceLogId: log.deviceLogId ?? (log.id ? Number(log.id) : null),
+            checkInTime,
+            method: log.method ?? "BIOMETRIC",
+          });
+        }
+
+        if (!isProcessed) {
+          unprocessedLogs.push(log);
+        }
+
+        this.processedKeys.add(key);
       }
 
       // Emit events for the bridge to process
-      if (logsToProcess.length > 0) {
-        this.emit('attendance', logsToProcess, true);
+      if (unprocessedLogs.length > 0) {
+        this.emit('attendance', unprocessedLogs, true);
       }
 
-      // Mark all processed logs as seen
-      for (const log of logsToProcess) {
-        const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
-        this.lastAttendanceFingerprint.add(key);
-      }
+      // Mark all processed logs in the database
+      for (const log of unprocessedLogs) {
+        const deviceUserId = this.getLogDeviceUserId(log);
+        const checkInTime = this.getLogTimestamp(log);
 
-      return { success: true, data: { total: logsToProcess.length } };
-    } catch (error) {
-      return { success: false, error: toErrorMessage(error) };
-    }
-  }
-
-  /** On startup, connect to device only. The fingerprint set and polling are handled
-   *  in syncAttendance() to ensure logs are processed when the renderer is ready. */
-  private async initializeAttendanceFingerprint(): Promise<void> {
-    try {
-      // Connect to device if not already connected
-      if (!this.connected) {
-        try {
-          await this.connect();
-        } catch {
-          // Device not reachable at startup - sync will happen on reconnect
-          return;
+        if (this.prisma && deviceUserId != null) {
+          try {
+            await recordDeviceAttendanceLog({
+              prisma: this.prisma,
+              deviceUserId,
+              deviceLogId: log.deviceLogId ?? (log.id ? Number(log.id) : null),
+              checkInTime,
+              method: log.method ?? "BIOMETRIC",
+            });
+          } catch {
+            // ignore duplicate errors
+          }
         }
       }
-      // Don't populate fingerprint set here - let syncAttendance() handle it
-      this.isFirstPoll = false;
-    } catch {
-      // If device is unreachable at startup, we'll sync on reconnect
+
+      this.initialSyncDone = true;
+
+      return { success: true, data: { total: unprocessedLogs.length } };
+    } catch (error) {
+      return { success: false, error: toErrorMessage(error) };
     }
   }
 
   private startPolling(): void {
     if (this.pollTimer) return;
     const interval = this.settings.pollInterval || DEFAULT_POLL_INTERVAL_MS;
+    
+    // Convert to a lightweight watchdog instead of heavy polling.
+    // startRealTimeLogs already handles real-time attendance natively.
     this.pollTimer = setInterval(async () => {
-      // Skip polling if we're still in initial sync mode (renderer not ready yet)
-      if (this.disposed || !this.connected || this.skipPolling) return;
-      try {
-        // Directly call client.getAttendance() to avoid triggering auto-connect
-        const logs = await this.client.getAttendance();
-        const newLogs = logs.filter((log: any) => {
-          const key = `${log.userId ?? log.uid ?? log.deviceUserId ?? 'unknown'}-${log.timestamp ?? log.attTime ?? ''}`;
-          return !this.lastAttendanceFingerprint.has(key);
-        });
-        // Keep fingerprint set bounded to last 500 entries to avoid memory bloat
-        const updatedSet = new Set<string>();
-        const existing = Array.from(this.lastAttendanceFingerprint);
-        // Keep the most recent entries (up to 500) plus the new ones
-        const toKeep = existing.slice(-500);
-        for (const k of toKeep) updatedSet.add(k);
-        for (const item of newLogs) {
-          updatedSet.add(`${item.userId ?? item.uid ?? item.deviceUserId ?? 'unknown'}-${item.timestamp ?? item.attTime ?? ''}`);
-        }
-        this.lastAttendanceFingerprint = updatedSet;
+      if (this.disposed || this.isPolling) return;
+      this.isPolling = true;
 
-        if (newLogs.length > 0) {
-          this.emit('attendance', newLogs, false);
+      if (!this.connected) {
+        try {
+          await this.connect();
+        } catch (err) {
+          deviceLogger.warn("Watchdog: Connection failed, will retry on next cycle", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          this.isPolling = false;
+          return;
         }
-      } catch (error) {
-        // Only emit offline if we were previously connected (prevents duplicate status spam)
-        if (this.connected) {
+      } else {
+        // Ping the device to ensure connection is actually alive
+        try {
+          await this.client.getDeviceInfo();
+        } catch (err) {
+          deviceLogger.error("Watchdog: Connection died, triggering reconnect", err);
           this.connected = false;
           this.consecutiveFailures++;
-          this.emitStatusOnce('offline', toErrorMessage(error));
+          this.emitStatusOnce('offline', toErrorMessage(err));
         }
       }
+      this.isPolling = false;
     }, interval);
   }
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setInterval(async () => {
-      if (this.disposed || !this.connected || this.isReconnecting) return;
+      if (this.disposed || this.isReconnecting) return;
       this.isReconnecting = true;
       try {
-        // Exponential backoff: increase interval based on consecutive failures
+        // Exponential backoff
         const backoffMs = Math.min(
           1000 * Math.pow(2, Math.min(this.consecutiveFailures, 10)),
-          300000 // cap at 5 minutes
+          300000
         );
-        // Skip this cycle if we're still in backoff period
         const now = Date.now();
         const lastFailure = (this as any)._lastFailureTime || 0;
         if (now - lastFailure < backoffMs) {
           return;
         }
         (this as any)._lastFailureTime = now;
-        await this.connect();
-      } catch {
-        // retry on next interval
+
+        if (!this.connected) {
+          try {
+            this.client.stopRealTimeLogs();
+            await this.connect();
+            this.consecutiveFailures = 0;
+          } catch (err) {
+            this.consecutiveFailures++;
+          }
+        }
       } finally {
         this.isReconnecting = false;
       }
     }, DEFAULT_RECONNECT_INTERVAL_MS);
   }
 
-  /** Emits a status event only if the status message has changed, to prevent flickering */
+  /** Emits a status event only if the status message has changed */
   private emitStatusOnce(status: DeviceStatusPayload['status'], message: string): void {
     const hash = `${status}:${message}`;
-    if (this.lastStatusEmitHash === hash) return;
-    this.lastStatusEmitHash = hash;
+    if ((this as any).lastStatusEmitHash === hash) return;
+    (this as any).lastStatusEmitHash = hash;
     this.emit('status', this.buildStatus(status, message));
   }
 

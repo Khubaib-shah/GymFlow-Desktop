@@ -106,3 +106,17 @@ model TrainerAttendance {
   method       String    @default("MANUAL")
   createdAt    DateTime  @default(now())
 }
+
+/// Tracks which attendance logs have been synced from the biometric device.
+/// Prevents duplicate processing across application restarts.
+model DeviceAttendanceLog {
+  id           String   @id @default(cuid())
+  deviceUserId Int
+  deviceLogId  Int?
+  checkInTime  DateTime
+  method       String   @default("BIOMETRIC")
+  createdAt    DateTime @default(now())
+
+  @@unique([deviceUserId, deviceLogId], name: "unique_device_attendance")
+  @@unique([deviceUserId, checkInTime, method], name: "unique_device_attendance_time")
+}

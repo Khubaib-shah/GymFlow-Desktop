@@ -20,6 +20,8 @@ export class ZKClient {
   private isDisconnecting = false;
   private connectionId = 0;
 
+  private realTimeCleanup: (() => void) | null = null;
+
   private async withTimeout<T>(promise: Promise<T>, ms = 5000): Promise<T> {
     return Promise.race([
       promise,
@@ -121,6 +123,8 @@ export class ZKClient {
   }
 
   async disconnect(): Promise<void> {
+    this.stopRealTimeLogs();
+
     if (this.isDisconnecting) {
       return;
     }
@@ -338,5 +342,102 @@ export class ZKClient {
       const time = await this.client.getTime();
       return time;
     });
+  }
+
+  /**
+   * Register for real-time attendance events from the device.
+   * The device pushes events immediately when a fingerprint is scanned.
+   * Only one real-time listener can be active at a time.
+   *
+   * Returns an unsubscribe function.
+   */
+  startRealTimeLogs(
+    onAttendance: (record: { userId: string; attTime: Date }) => void,
+  ): () => void {
+    this.stopRealTimeLogs();
+
+    if (!this.client) {
+      throw new Error("Not connected to device");
+    }
+
+    const transport = this.client.zklibTcp || this.client.zklibUdp;
+    if (!transport || !transport.socket) {
+      throw new Error("Device socket not available");
+    }
+
+    // CMD_REG_EVENT = 500, EF_ATTLOG = 1 (from node-zklib constants)
+    const EV_CMD_REG_EVENT = 500;
+    const EV_EF_ATTLOG = 1;
+
+    const handler = (data: Buffer) => {
+      try {
+        // checkNotEventTCP equivalent: verify this is an attendance event
+        if (data.length < 16) return;
+        const commandId = data.readUIntLE(8, 2);
+        const event = data.readUIntLE(12, 2);
+        if (event !== EV_EF_ATTLOG || commandId !== EV_CMD_REG_EVENT) return;
+
+        // Decode 52-byte real-time log record
+        const recvData = data.slice(16);
+        const userId = recvData
+          .slice(0, 9)
+          .toString("ascii")
+          .split("\0")
+          .shift();
+        if (userId == null || userId === "") return;
+
+        const hex = recvData.subarray(26, 32);
+        const year = hex.readUIntLE(0, 1);
+        const month = hex.readUIntLE(1, 1);
+        const date = hex.readUIntLE(2, 1);
+        const hour = hex.readUIntLE(3, 1);
+        const minute = hex.readUIntLE(4, 1);
+        const second = hex.readUIntLE(5, 1);
+        const attTime = new Date(2000 + year, month - 1, date, hour, minute, second);
+
+        if (userId) {
+          onAttendance({ userId, attTime });
+        }
+      } catch {
+        // Ignore malformed packets
+      }
+    };
+
+    transport.socket.on("data", handler);
+
+    try {
+      transport.replyId++;
+      const { createTCPHeader } = require("node-zklib/utils");
+
+      const buf = createTCPHeader(
+        EV_CMD_REG_EVENT,
+        transport.sessionId,
+        transport.replyId,
+        Buffer.from([0x01, 0x00, 0x00, 0x00]),
+      );
+      transport.socket.write(buf);
+    } catch (err) {
+      transport.socket.removeListener("data", handler);
+      throw err;
+    }
+
+    this.realTimeCleanup = () => {
+      try {
+        if (transport.socket) {
+          transport.socket.removeListener("data", handler);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    return this.realTimeCleanup!;
+  }
+
+  stopRealTimeLogs(): void {
+    if (this.realTimeCleanup) {
+      this.realTimeCleanup();
+      this.realTimeCleanup = null;
+    }
   }
 }

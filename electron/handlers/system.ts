@@ -2,27 +2,29 @@ import { app, dialog, BrowserWindow } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type { PrismaClient } from '@prisma/client';
+import { deviceManager } from '../zkTeco/DeviceManager';
 
 export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: PrismaClient) {
   ipcMain.handle('system:backupDb', async () => {
     const win = BrowserWindow.getFocusedWindow();
     if (!win) return { success: false, error: 'No focused window' };
 
-    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    const { canceled, filePath: savePath } = await dialog.showSaveDialog(win, {
       title: 'Backup Database',
       defaultPath: `gms_backup_${new Date().toISOString().split('T')[0]}.db`,
       filters: [{ name: 'SQLite Database', extensions: ['db'] }]
     });
 
-    if (canceled || !filePath) return { success: false, error: 'User canceled' };
+    if (canceled || !savePath) return { success: false, error: 'User canceled' };
 
     try {
       await prisma.$disconnect();
-      fs.copyFileSync(dbPath, filePath);
+      fs.copyFileSync(dbPath, savePath);
       await prisma.$connect();
-      return { success: true, filePath };
+      return { success: true, filePath: savePath };
     } catch (error: any) {
       console.error('Backup error:', error);
+      await prisma.$connect().catch(() => { });
       return { success: false, error: error.message };
     }
   });
@@ -60,51 +62,54 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: Pri
     }
   });
 
-  // One-click reset: wipes all data from every table without needing a file picker.
+  /**
+   * Resets the application database to a completely empty state.
+   *
+   * Deletes all records from all tables in dependency order (child tables first)
+   * so that foreign key constraints are satisfied without needing PRAGMA foreign_keys = OFF.
+   *
+   * Also resets the device settings stored in userData.
+   *
+   * The biometric device itself is NOT affected.
+   */
   ipcMain.handle('system:resetDb', async () => {
     try {
-      const isDev = !app.isPackaged;
+      // Phase 1: Delete all records via Prisma in dependency order.
+      // Children first, then parents — this satisfies FK constraints naturally.
+      await prisma.trainerAttendance.deleteMany();
+      await prisma.attendance.deleteMany();
+      await prisma.payment.deleteMany();
+      await prisma.member.deleteMany();
+      await prisma.membershipPlan.deleteMany();
+      await prisma.trainer.deleteMany();
+      await prisma.deviceAttendanceLog.deleteMany();
+      await prisma.owner.deleteMany();
 
-      await prisma.$disconnect();
-
-      if (isDev) {
-        // In development: use the sqlite3 module to delete all rows from each table
-        const sqlite3 = require('sqlite3').verbose();
-        const db = new sqlite3.Database(dbPath);
-        await new Promise<void>((resolve, reject) => {
-          db.serialize(() => {
-            db.run('PRAGMA foreign_keys = OFF');
-            const tables = ['Payment', 'Attendance', 'Member', 'Trainer', 'MembershipPlan', 'Owner'];
-            for (const table of tables) {
-              db.run(`DELETE FROM "${table}"`);
-            }
-            db.run('PRAGMA foreign_keys = ON', (err: any) => {
-              if (err) reject(err); else resolve();
-            });
-          });
-        });
-        db.close();
-
-        await prisma.$connect();
-        return { success: true };
-      } else {
-        // In production: overwrite the user db with the pristine seed database, then relaunch
-        const pristineDb = path.join(process.resourcesPath, 'dev.db');
-        if (!fs.existsSync(pristineDb)) {
-          return { success: false, error: 'Pristine database not found in app resources.' };
-        }
-
-        if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
-        if (fs.existsSync(`${dbPath}-shm`)) fs.unlinkSync(`${dbPath}-shm`);
-
-        fs.copyFileSync(pristineDb, dbPath);
-        app.relaunch();
-        app.quit();
-        return { success: true };
+      // Phase 2: Clear DeviceManager runtime state and stop polling
+      deviceManager.clearCache();
+      try {
+        await deviceManager.disconnect();
+      } catch {
+        // ignore disconnect errors
       }
+
+      // Phase 3: Reset device settings to defaults
+      const { deviceSettingsStore } = require('../zkTeco/DeviceSettings');
+      try {
+        deviceSettingsStore.save({
+          enabled: false,
+          ip: '',
+          port: 4370,
+          timeout: 10000,
+          pollInterval: 5000,
+        });
+      } catch {
+        // ignore settings reset errors
+      }
+
+      return { success: true };
     } catch (error: any) {
       console.error('Reset DB error:', error);
-      await prisma.$connect().catch(() => { });
       return { success: false, error: error.message };
     }
   });

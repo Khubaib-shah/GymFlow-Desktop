@@ -2,7 +2,6 @@ import type { DeviceAttendancePayload } from "../types";
 import { deviceLogger } from "../DeviceLogger";
 
 function getAttendanceTimestamp(logItem: DeviceAttendancePayload): Date {
-  // Device may return timestamp in various formats - try all common ones
   const raw =
     logItem.timestamp ??
     (logItem as any).attTime ??
@@ -10,29 +9,19 @@ function getAttendanceTimestamp(logItem: DeviceAttendancePayload): Date {
     (logItem as any).checkTime ??
     (logItem as any).date;
 
-  deviceLogger.info("Raw timestamp from device log", { raw, logItem });
-
   if (raw == null) {
     deviceLogger.warn("No timestamp found in log item, using current time");
     return new Date();
   }
 
-  // Handle different timestamp formats
   let d: Date;
-
-  // If it's a number, it might be Unix timestamp (seconds or milliseconds)
   if (typeof raw === 'number') {
-    // If the number is small (< 10^10), it's probably seconds since epoch
     const ms = raw < 10000000000 ? raw * 1000 : raw;
     d = new Date(ms);
-    deviceLogger.info("Parsed numeric timestamp", { raw, ms, parsed: d.toISOString() });
   } else if (typeof raw === 'string') {
-    // Try parsing as ISO string or other formats
     d = new Date(raw);
-    deviceLogger.info("Parsed string timestamp", { raw, parsed: d.toISOString() });
   } else {
     d = new Date(raw);
-    deviceLogger.info("Parsed object timestamp", { parsed: d.toISOString() });
   }
 
   if (Number.isNaN(d.getTime())) {
@@ -60,9 +49,6 @@ export async function upsertAttendanceFromBiometric(args: {
 }> {
   const { prisma, member, logItem, deviceUserId } = args;
 
-  const now = roundToSeconds(new Date());
-
-  // Device logs can contain duplicates; normalize the computed check-in time.
   const checkInTime = roundToSeconds(getAttendanceTimestamp(logItem));
 
   deviceLogger.info("Processing attendance log", {
@@ -71,27 +57,26 @@ export async function upsertAttendanceFromBiometric(args: {
     checkInTime: checkInTime.toISOString(),
   });
 
-  // Prevent duplicate check-in within 1 second (for biometric scans)
-  const nearDuplicate = await prisma.attendance.findFirst({
+  // Prevent duplicate: check for existing record with exact same (memberId, checkInTime, method)
+  // using second-level precision for reliable dedup
+  const existing = await prisma.attendance.findFirst({
     where: {
       memberId: member.id,
-      checkInTime: {
-        gte: new Date(checkInTime.getTime() - 1000),
-        lte: new Date(checkInTime.getTime() + 1000),
-      },
+      checkInTime,
       method: "BIOMETRIC",
     },
   });
 
-  if (nearDuplicate) {
-    deviceLogger.info("Near-duplicate check-in skipped", {
+  if (existing) {
+    deviceLogger.info("Duplicate check-in skipped (exact match)", {
       deviceUserId,
       memberId: member.id,
+      attendanceId: existing.id,
     });
-    return { ipcEvent: "attendance:checkin", attendance: nearDuplicate };
+    return { ipcEvent: "attendance:checkin", attendance: existing };
   }
 
-  // Always create a new check-in record (check-in only mode)
+  // Always create a new check-in record
   const created = await prisma.attendance.create({
     data: {
       memberId: member.id,

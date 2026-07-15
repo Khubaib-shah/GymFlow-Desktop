@@ -115,6 +115,9 @@ app.whenReady().then(async () => {
     });
   };
 
+  // Provide Prisma instance to DeviceManager for persistent dedup tracking
+  deviceManager.setPrismaClient(prisma);
+
   registerDeviceAttendanceBridge({
     prisma,
     getMemberByDeviceUserId,
