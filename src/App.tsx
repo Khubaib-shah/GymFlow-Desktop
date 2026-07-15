@@ -39,8 +39,7 @@ export default function App() {
           `${data.member?.firstName || ""} ${data.member?.lastName || ""}`.trim() ||
           "Member";
         let msg = "";
-        if (type === "checkin") msg = `Welcome, ${memberName}`;
-        else if (type === "expired")
+        if (type === "expired")
           msg = `Dear ${memberName}, your subscription has expired. Please renew your membership.`;
         else if (type === "inactive")
           msg = `Dear ${memberName}, your membership has been suspended. Please contact reception.`;
@@ -56,9 +55,12 @@ export default function App() {
           toastTimer = setTimeout(() => setToast(null), 5000);
 
           // Speech Synthesis
-          const speech = new SpeechSynthesisUtterance(msg);
           const voices = speechSynthesis.getVoices();
-          speech.voice = voices[2];
+          const speech = new SpeechSynthesisUtterance(msg);
+          speech.voice =
+            voices.find(v => v.lang === "en-US") ||
+            voices.find(v => v.lang.startsWith("en")) ||
+            voices[0];
           speech.rate = 0.95;
           speech.pitch = 1;
           window.speechSynthesis.cancel();
