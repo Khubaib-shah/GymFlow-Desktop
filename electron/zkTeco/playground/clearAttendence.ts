@@ -1,3 +1,4 @@
+// @ts-nocheck
 const ZKLib = require("node-zklib");
 
 (async () => {

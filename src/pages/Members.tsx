@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { buildWhatsAppUrl } from "../utils/whatsapp";
+import { Pagination } from "../components/Pagination";
 
 // Utility functions for masking and formatting
 const formatCNIC = (value: string) => {
@@ -60,13 +61,7 @@ export default function Members() {
   const [createPaymentMethod, setCreatePaymentMethod] = useState("CASH");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
-  const [deviceSyncStatus, setDeviceSyncStatus] = useState<
-    Record<
-      string,
-      { onDevice: boolean; employeeNo: number | null; deviceSynced: boolean }
-    >
-  >({});
-  const [syncLoading, setSyncLoading] = useState(true);
+  const [syncingUserId, setSyncingUserId] = useState<number | null>(null);
 
   // Renew Modal State
   const [renewModalOpen, setRenewModalOpen] = useState(false);
@@ -75,6 +70,14 @@ export default function Members() {
   const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 50;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter]);
+
   // Enrollment modal state
   const [enrollModalOpen, setEnrollModalOpen] = useState(false);
   const [enrollMemberId, setEnrollMemberId] = useState<string | null>(null);
@@ -109,32 +112,40 @@ export default function Members() {
     }
   }, [location.search, members, navigate]);
 
-  const fetchDeviceSyncStatus = async () => {
+  const [syncLoading, setSyncLoading] = useState(false);
+
+  const handleFullSync = async () => {
     setSyncLoading(true);
     try {
-      const res = await (window as any).api.members.getDeviceSyncStatus();
-      if (res?.success && Array.isArray(res.data)) {
-        const map: Record<
-          string,
-          {
-            onDevice: boolean;
-            employeeNo: number | null;
-            deviceSynced: boolean;
-          }
-        > = {};
-        for (const s of res.data) {
-          map[s.id] = {
-            onDevice: s.onDevice,
-            employeeNo: s.employeeNo,
-            deviceSynced: s.deviceSynced,
-          };
-        }
-        setDeviceSyncStatus(map);
+      const res = await (window as any).api.device.syncUsers();
+      if (res?.success) {
+        alert(`Sync Complete!\n\nMembers Created: ${res.data.membersCreated}\nTrainers Created: ${res.data.trainersCreated}\nTemplates Synced: ${res.data.templatesSynced}`);
+      } else {
+        alert(`Sync failed: ${res?.error || "Unknown error"}`);
       }
-    } catch {
-      // ignore
+      await fetchMembers();
+    } catch (e: any) {
+      alert(`Error during sync: ${e.message}`);
     } finally {
       setSyncLoading(false);
+    }
+  };
+
+  const handleSyncUser = async (member: any) => {
+    if (!member.employeeNo) return;
+    setSyncingUserId(member.employeeNo);
+    try {
+      const res = await (window as any).api.device.syncUser(member.employeeNo);
+      if (res?.success) {
+        // Just refresh the data silently
+      } else {
+        alert(`Failed to sync member: ${res?.error || "Unknown error"}`);
+      }
+      await fetchMembers();
+    } catch (e: any) {
+      alert(`Error during sync: ${e.message}`);
+    } finally {
+      setSyncingUserId(null);
     }
   };
 
@@ -162,7 +173,6 @@ export default function Members() {
 
   useEffect(() => {
     fetchMembers();
-    fetchDeviceSyncStatus();
     (window as any).api.trainers.getAll().then(setTrainers);
     (window as any).api.plans.getAll().then(setPlans);
   }, []);
@@ -266,6 +276,8 @@ export default function Members() {
         attendances,
         employeeNo,
         deviceSynced,
+        fingerprints,
+        _count,
         ...updateData
       } = dataToSave;
       await (window as any).api.members.update(editingId, updateData);
@@ -329,7 +341,7 @@ export default function Members() {
           try {
             window.alert(`Please enroll fingerprint on the device for user ID ${newMember.employeeNo}.
 \n${uiMessage}`);
-          } catch {}
+          } catch { }
 
           // start polling member record for deviceSynced
           if (enrollTimerRef.current)
@@ -383,14 +395,12 @@ export default function Members() {
     }
     setIsModalOpen(false);
     fetchMembers();
-    fetchDeviceSyncStatus();
   };
 
   const handleDelete = async (id: string) => {
     if (confirm("Are you sure you want to delete this member?")) {
       await (window as any).api.members.delete(id);
       fetchMembers();
-      fetchDeviceSyncStatus();
     }
   };
 
@@ -423,7 +433,7 @@ export default function Members() {
       planId: selectedPlanId,
       membershipStart:
         selectedRenewMember.membershipEnd &&
-        new Date(selectedRenewMember.membershipEnd) > new Date()
+          new Date(selectedRenewMember.membershipEnd) > new Date()
           ? selectedRenewMember.membershipStart
           : new Date().toISOString(),
       membershipEnd: newEndDate.toISOString(),
@@ -479,49 +489,49 @@ export default function Members() {
     color: string;
     activeColor: string;
   }[] = [
-    {
-      key: "ALL",
-      label: "All Members",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-white hover:border-gray-500",
-      activeColor: "bg-white/10 border-white/30 text-white",
-    },
-    {
-      key: "LEAD",
-      label: "Leads",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-blue-400 hover:border-blue-500/40",
-      activeColor: "bg-blue-500/10 border-blue-500/40 text-blue-400",
-    },
-    {
-      key: "ACTIVE",
-      label: "Active",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-green-400 hover:border-green-500/40",
-      activeColor: "bg-green-500/10 border-green-500/40 text-green-400",
-    },
-    {
-      key: "EXPIRED",
-      label: "Expired",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-red-400 hover:border-red-500/40",
-      activeColor: "bg-red-500/10 border-red-500/40 text-red-400",
-    },
-    {
-      key: "INACTIVE",
-      label: "Inactive",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-yellow-400 hover:border-yellow-500/40",
-      activeColor: "bg-yellow-500/10 border-yellow-500/40 text-yellow-400",
-    },
-    {
-      key: "SUSPENDED",
-      label: "Suspended",
-      color:
-        "border-[#2a2e37] text-gray-400 hover:text-orange-400 hover:border-orange-500/40",
-      activeColor: "bg-orange-500/10 border-orange-500/40 text-orange-400",
-    },
-  ];
+      {
+        key: "ALL",
+        label: "All Members",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-white hover:border-gray-500",
+        activeColor: "bg-white/10 border-white/30 text-white",
+      },
+      {
+        key: "LEAD",
+        label: "Leads",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-blue-400 hover:border-blue-500/40",
+        activeColor: "bg-blue-500/10 border-blue-500/40 text-blue-400",
+      },
+      {
+        key: "ACTIVE",
+        label: "Active",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-green-400 hover:border-green-500/40",
+        activeColor: "bg-green-500/10 border-green-500/40 text-green-400",
+      },
+      {
+        key: "EXPIRED",
+        label: "Expired",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-red-400 hover:border-red-500/40",
+        activeColor: "bg-red-500/10 border-red-500/40 text-red-400",
+      },
+      {
+        key: "INACTIVE",
+        label: "Inactive",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-yellow-400 hover:border-yellow-500/40",
+        activeColor: "bg-yellow-500/10 border-yellow-500/40 text-yellow-400",
+      },
+      {
+        key: "SUSPENDED",
+        label: "Suspended",
+        color:
+          "border-[#2a2e37] text-gray-400 hover:text-orange-400 hover:border-orange-500/40",
+        activeColor: "bg-orange-500/10 border-orange-500/40 text-orange-400",
+      },
+    ];
 
   return (
     <div className="space-y-6">
@@ -558,7 +568,7 @@ export default function Members() {
             />
           </div>
           <button
-            onClick={fetchDeviceSyncStatus}
+            onClick={handleFullSync}
             disabled={syncLoading}
             className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -605,15 +615,13 @@ export default function Members() {
           <button
             key={f.key}
             onClick={() => setStatusFilter(f.key)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium transition-all ${
-              statusFilter === f.key ? f.activeColor : f.color
-            }`}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium transition-all ${statusFilter === f.key ? f.activeColor : f.color
+              }`}
           >
             {f.label}
             <span
-              className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
-                statusFilter === f.key ? "bg-white/20" : "bg-[#1a1d24]"
-              }`}
+              className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${statusFilter === f.key ? "bg-white/20" : "bg-[#1a1d24]"
+                }`}
             >
               {statusCounts[f.key as keyof typeof statusCounts]}
             </span>
@@ -656,156 +664,196 @@ export default function Members() {
                   </td>
                 </tr>
               ) : (
-                filteredMembers.map((member) => {
-                  const daysLeft = getDaysUntilExpiry(member.membershipEnd);
-                  const isExpiringSoon =
-                    daysLeft !== null &&
-                    daysLeft >= 0 &&
-                    daysLeft <= 7 &&
-                    member.status === "ACTIVE";
-                  const whatsappUrl = buildWhatsAppUrl(member);
+                filteredMembers
+                  .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+                  .map((member) => {
+                    const daysLeft = getDaysUntilExpiry(member.membershipEnd);
+                    const isExpiringSoon =
+                      daysLeft !== null &&
+                      daysLeft >= 0 &&
+                      daysLeft <= 7 &&
+                      member.status === "ACTIVE";
+                    const whatsappUrl = buildWhatsAppUrl(member);
 
-                  return (
-                    <tr
-                      key={member.id}
-                      className="hover:bg-[#1a1d24]/50 transition-colors"
-                    >
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-primary-600/20 text-primary-500 flex items-center justify-center font-bold">
-                            {member.firstName[0]}
-                            {member.lastName ? member.lastName[0] : ""}
-                          </div>
-                          <div>
-                            <div className="font-medium text-white">
-                              {member.firstName} {member.lastName || ""}
+                    return (
+                      <tr
+                        key={member.id}
+                        className="hover:bg-[#1a1d24]/50 transition-colors"
+                      >
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-primary-600/20 text-primary-500 flex items-center justify-center font-bold">
+                              {member.firstName[0]}
+                              {member.lastName ? member.lastName[0] : ""}
                             </div>
-                            <div className="text-xs text-gray-500">
-                              {member.cnic || "No CNIC"}
+                            <div>
+                              <div className="font-medium text-white">
+                                {member.firstName} {member.lastName || ""}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {member.cnic || "No CNIC"}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-gray-300">
-                          {member.phone || "N/A"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {member.email || "N/A"}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col gap-1">
-                          <span
-                            className={`px-2.5 py-1 rounded-full text-xs font-medium w-fit ${
-                              member.status === "ACTIVE"
-                                ? "bg-green-500/10 text-green-400 border border-green-500/20"
-                                : member.status === "LEAD"
-                                  ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                                  : member.status === "EXPIRED"
-                                    ? "bg-red-500/10 text-red-400 border border-red-500/20"
-                                    : member.status === "INACTIVE"
-                                      ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
-                                      : member.status === "SUSPENDED"
-                                        ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
-                                        : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
-                            }`}
-                          >
-                            {member.status}
-                          </span>
-                          {isExpiringSoon && (
-                            <span className="text-xs text-amber-400 font-medium">
-                              ⚠ Expires in {daysLeft}d
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-gray-300">
-                          {member.plan?.name || "No Plan"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Trainer:{" "}
-                          {member.trainer
-                            ? `${member.trainer.firstName} ${member.trainer.lastName || ""}`
-                            : "None"}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col gap-1 text-xs">
-                          {member.employeeNo && (
-                            <span className="text-gray-400">
-                              ID: {member.employeeNo}
-                            </span>
-                          )}
-                          {(() => {
-                            if (syncLoading) {
-                              return (
-                                <span className="text-gray-400 text-xs animate-pulse">
-                                  Checking...
-                                </span>
-                              );
-                            }
-                            const sync = deviceSyncStatus[member.id];
-                            if (!sync) return null;
-
-                            if (!member.employeeNo && !sync.onDevice) {
-                              return (
-                                <span className="text-gray-500">
-                                  Not on Device
-                                </span>
-                              );
-                            }
-                          })()}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          {/* WhatsApp button — only shown if member has a phone */}
-                          {whatsappUrl && (
-                            <a
-                              href={whatsappUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Send WhatsApp message"
-                              className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 hover:text-green-300 transition-all border border-green-500/20 hover:border-green-500/40"
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-gray-300">
+                            {member.phone || "N/A"}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {member.email || "N/A"}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col gap-1">
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-xs font-medium w-fit ${member.status === "ACTIVE"
+                                  ? "bg-green-500/10 text-green-400 border border-green-500/20"
+                                  : member.status === "LEAD"
+                                    ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                                    : member.status === "EXPIRED"
+                                      ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                                      : member.status === "INACTIVE"
+                                        ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
+                                        : member.status === "SUSPENDED"
+                                          ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
+                                          : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
+                                }`}
                             >
-                              {/* WhatsApp Icon */}
-                              <svg
-                                className="w-4 h-4"
-                                viewBox="0 0 24 24"
-                                fill="currentColor"
+                              {member.status}
+                            </span>
+                            {isExpiringSoon && (
+                              <span className="text-xs text-amber-400 font-medium">
+                                ⚠ Expires in {daysLeft}d
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-gray-300">
+                            {member.plan?.name || "No Plan"}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            Trainer:{" "}
+                            {member.trainer
+                              ? `${member.trainer.firstName} ${member.trainer.lastName || ""}`
+                              : "None"}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col gap-1 text-xs">
+                            {member.employeeNo && (
+                              <span className="text-gray-400">
+                                ID: {member.employeeNo}
+                              </span>
+                            )}
+
+                            {(() => {
+                              if (syncLoading) {
+                                return (
+                                  <span className="text-gray-400 text-xs animate-pulse">
+                                    Checking...
+                                  </span>
+                                );
+                              }
+                              const fingerprintCount = member.fingerprints?.length || 0;
+                              const onDevice = member.deviceSynced;
+
+                              return (
+                                <div className="flex flex-col gap-1">
+                                  {fingerprintCount > 0 && (
+                                    <span className="text-green-400">
+                                      Enrolled ({fingerprintCount})
+                                    </span>
+                                  )}
+                                  {member.employeeNo && onDevice && fingerprintCount === 0 && (
+                                    <span className="text-blue-400">
+                                      Waiting for Fingerprint
+                                    </span>
+                                  )}
+                                  {member.employeeNo && !onDevice && member.status !== 'LEAD' && (
+                                    <span className="text-orange-400">
+                                      Pending Sync
+                                    </span>
+                                  )}
+                                  {!member.employeeNo && !onDevice && member.status !== 'LEAD' && (
+                                    <span className="text-gray-500">
+                                      Not on Device
+                                    </span>
+                                  )}
+                                  {member.status === 'LEAD' && (
+                                    <span className="text-gray-500 italic text-xs">
+                                      N/A
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            {/* WhatsApp button — only shown if member has a phone */}
+                            {whatsappUrl && (
+                              <a
+                                href={whatsappUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Send WhatsApp message"
+                                className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 hover:text-green-300 transition-all border border-green-500/20 hover:border-green-500/40"
                               >
-                                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                              </svg>
-                            </a>
-                          )}
-                          <button
-                            onClick={() => openRenewModal(member)}
-                            className="text-primary-400 hover:text-primary-300 transition-colors font-medium text-sm"
-                          >
-                            Renew
-                          </button>
-                          <button
-                            onClick={() => openModal(member)}
-                            className="text-gray-400 hover:text-white transition-colors text-sm"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDelete(member.id)}
-                            className="text-gray-400 hover:text-red-400 transition-colors text-sm"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                                {/* WhatsApp Icon */}
+                                <svg
+                                  className="w-4 h-4"
+                                  viewBox="0 0 24 24"
+                                  fill="currentColor"
+                                >
+                                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                                </svg>
+                              </a>
+                            )}
+                            {member.status !== 'LEAD' && (
+                              <button
+                                onClick={() => handleSyncUser(member)}
+                                disabled={syncingUserId === member.employeeNo || !member.employeeNo}
+                                className={`text-blue-400 hover:text-blue-300 transition-colors font-medium text-sm ${(syncingUserId === member.employeeNo || !member.employeeNo) ? "opacity-50 cursor-not-allowed" : ""
+                                  }`}
+                              >
+                                {syncingUserId === member.employeeNo ? "Syncing..." : "Sync"}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => openRenewModal(member)}
+                              className="text-primary-400 hover:text-primary-300 transition-colors font-medium text-sm"
+                            >
+                              Renew
+                            </button>
+                            <button
+                              onClick={() => openModal(member)}
+                              className="text-gray-400 hover:text-white transition-colors text-sm"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDelete(member.id)}
+                              className="text-gray-400 hover:text-red-400 transition-colors text-sm"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
               )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={filteredMembers.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+          />
         </div>
       </div>
 
@@ -1222,8 +1270,8 @@ export default function Members() {
                     <span className="text-white font-medium">
                       {selectedRenewMember.membershipEnd
                         ? new Date(
-                            selectedRenewMember.membershipEnd,
-                          ).toLocaleDateString()
+                          selectedRenewMember.membershipEnd,
+                        ).toLocaleDateString()
                         : "None"}
                     </span>
                   </div>

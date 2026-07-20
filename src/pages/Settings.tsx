@@ -6,7 +6,7 @@ export default function Settings() {
   const [resetting, setResetting] = useState(false);
 
   const [enabled, setEnabled] = useState(false);
-  const [deviceType, setDeviceType] = useState("zkteco-k70");
+  const [deviceType, setDeviceType] = useState("zkteco-k40");
   const [ip, setIp] = useState("");
   const [port, setPort] = useState("4370");
   const [timeout, setTimeout] = useState("10000");
@@ -29,7 +29,7 @@ export default function Settings() {
         if (!mounted) return;
         const config = response?.data ?? response;
         setEnabled(Boolean(config?.enabled));
-        setDeviceType(config?.deviceType || "zkteco-k70");
+        setDeviceType(config?.deviceType || "zkteco-k40");
         setIp(config?.ip || "");
         setPort(String(config?.port || 4370));
         setTimeout(String(config?.timeout || 10000));
@@ -256,7 +256,7 @@ export default function Settings() {
               d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
             />
           </svg>
-          ZKTeco K70 Device
+          ZKTeco K40 Device
           {status === "connected" && (
             <span className="ml-auto text-xs font-medium px-2.5 py-1 rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
               ● Connected
@@ -440,7 +440,7 @@ export default function Settings() {
                 <span className="text-white ml-2">
                   {deviceStatus?.deviceName ||
                     deviceInfo?.deviceName ||
-                    "ZKTeco K70"}
+                    "ZKTeco Device"}
                 </span>
               </div>
               <div>

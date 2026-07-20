@@ -1,4 +1,4 @@
-export const DEVICE_TYPE = "zkteco-k70";
+export const DEVICE_TYPE = "zkteco-k40";
 export const DEFAULT_DEVICE_SETTINGS = {
   enabled: false,
   deviceType: DEVICE_TYPE,

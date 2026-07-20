@@ -35,20 +35,31 @@ export default function App() {
 
     if (api?.device?.onAttendanceEvent) {
       const handleAttendanceEvent = (type: string, data: any) => {
+        if (data.startupSync) return; // Ignore bulk offline syncs for notifications
+
         const memberName =
           `${data.member?.firstName || ""} ${data.member?.lastName || ""}`.trim() ||
           "Member";
         let msg = "";
-        if (type === "expired")
+        
+        if (type === "checkin") {
+          msg = `Welcome ${memberName}!`;
+        } else if (type === "expired") {
           msg = `Dear ${memberName}, your subscription has expired. Please renew your membership.`;
-        else if (type === "inactive")
+        } else if (type === "inactive") {
           msg = `Dear ${memberName}, your membership has been suspended. Please contact reception.`;
+        } else if (type === "trainerCheckin") {
+          const trainerName =
+            `${data.trainer?.firstName || ""} ${data.trainer?.lastName || ""}`.trim() ||
+            "Trainer";
+          msg = `Welcome ${trainerName}!`;
+        }
 
         if (msg) {
           // Show Toast
           setToast({
             message: msg,
-            type: type === "checkin" ? "success" : "error",
+            type: type === "checkin" || type === "trainerCheckin" ? "success" : "error",
           });
           // Clear any existing toast timer before setting a new one
           if (toastTimer) clearTimeout(toastTimer);
@@ -57,10 +68,7 @@ export default function App() {
           // Speech Synthesis
           const voices = speechSynthesis.getVoices();
           const speech = new SpeechSynthesisUtterance(msg);
-          speech.voice =
-            voices.find(v => v.lang === "en-US") ||
-            voices.find(v => v.lang.startsWith("en")) ||
-            voices[0];
+          speech.voice = voices[2];
           speech.rate = 0.95;
           speech.pitch = 1;
           window.speechSynthesis.cancel();

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Pagination } from '../components/Pagination';
 
 // ──────────────────────────────────────────────────────────
 // Helper: shared date filtering
@@ -46,6 +47,13 @@ function MemberAttendanceTab() {
   const [dateFilter, setDateFilter] = useState('today');
   const [customDate, setCustomDate] = useState('');
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 50;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, dateFilter, customDate]);
+
   const fetchLogs = async () => {
     setLoading(true);
     const data = await (window as any).api.attendance.getAll();
@@ -60,10 +68,14 @@ function MemberAttendanceTab() {
     const api = (window as any).api;
     let cleanupListeners: (() => void) | undefined;
     if (api?.device?.onAttendanceEvent) {
-      cleanupListeners = api.device.onAttendanceEvent((type: string) => {
+      cleanupListeners = api.device.onAttendanceEvent((type: string, data: any) => {
         // Only refresh on attendance events (checkin only)
         if (type === 'checkin') {
           fetchLogs();
+        } else if (type === 'ignored') {
+          // Show toast notification for 4-hour rule
+          const name = data?.member?.firstName || data?.trainer?.firstName || 'User';
+          alert(`${name} already checked in recently (4-hour rule).`);
         }
       });
     }
@@ -159,13 +171,15 @@ function MemberAttendanceTab() {
                   {searchQuery ? 'No records match your search.' : 'No attendance records found for this period.'}
                 </td></tr>
               ) : (
-                filteredLogs.map(log => {
+                filteredLogs
+                  .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+                  .map(log => {
                   const checkInDate = new Date(log.checkInTime);
                   return (
                     <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
                       <td className="px-6 py-4 font-medium text-white">{log.member.firstName} {log.member.lastName}</td>
-                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString()}</td>
-                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString()}</td>
+                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}</td>
+                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString('en-US')}</td>
                       <td className="px-6 py-4">
                         <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
                           }`}>{log.method}</span>
@@ -176,6 +190,12 @@ function MemberAttendanceTab() {
               )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={filteredLogs.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+          />
         </div>
       </div>
 
@@ -256,6 +276,13 @@ function TrainerAttendanceTab() {
   const [dateFilter, setDateFilter] = useState('today');
   const [customDate, setCustomDate] = useState('');
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 50;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, dateFilter, customDate]);
+
   const fetchLogs = async () => {
     setLoading(true);
     const data = await (window as any).api.trainerAttendance.getAll();
@@ -266,6 +293,20 @@ function TrainerAttendanceTab() {
   useEffect(() => {
     fetchLogs();
     (window as any).api.trainers.getAll().then(setTrainers);
+
+    const api = (window as any).api;
+    let cleanupListeners: (() => void) | undefined;
+    if (api?.device?.onAttendanceEvent) {
+      cleanupListeners = api.device.onAttendanceEvent((type: string) => {
+        if (type === 'trainerCheckin') {
+          fetchLogs();
+        }
+      });
+    }
+
+    return () => {
+      if (cleanupListeners) cleanupListeners();
+    };
   }, []);
 
   const handleManualSubmit = async (e: React.FormEvent) => {
@@ -354,7 +395,9 @@ function TrainerAttendanceTab() {
                   {searchQuery ? 'No records match your search.' : 'No trainer attendance records found for this period.'}
                 </td></tr>
               ) : (
-                filteredLogs.map(log => {
+                filteredLogs
+                  .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+                  .map(log => {
                   const checkInDate = new Date(log.checkInTime);
                   return (
                     <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
@@ -367,8 +410,8 @@ function TrainerAttendanceTab() {
                         </div>
                       </td>
                       <td className="px-6 py-4 text-gray-400">{log.trainer.specialty || '—'}</td>
-                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString()}</td>
-                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString()}</td>
+                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}</td>
+                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString('en-US')}</td>
                       <td className="px-6 py-4">
                         <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
                           }`}>{log.method}</span>
@@ -379,6 +422,12 @@ function TrainerAttendanceTab() {
               )}
             </tbody>
           </table>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={filteredLogs.length}
+            itemsPerPage={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+          />
         </div>
       </div>
 

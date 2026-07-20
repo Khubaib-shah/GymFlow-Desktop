@@ -7,8 +7,6 @@ import { upsertAttendanceFromBiometric } from "./membership/upsertAttendanceFrom
 import { upsertTrainerAttendanceFromBiometric } from "./membership/upsertTrainerAttendanceFromBiometric";
 import type { BrowserWindow } from "electron";
 
-const TRAINER_ID_THRESHOLD = 10000;
-
 export function registerDeviceAttendanceBridge(args: {
   prisma: any;
   getMemberByDeviceUserId: (deviceUserId: number) => Promise<any | null>;
@@ -30,7 +28,7 @@ export function registerDeviceAttendanceBridge(args: {
     try {
       const users = await deviceManager.getUsers();
       return users.find((u: any) => {
-        const uid = String(u.uid ?? u.userId ?? u.id ?? u.employeeNo ?? u.userid);
+        const uid = String(u.user_id ?? u.uid ?? u.userId ?? u.id ?? u.employeeNo ?? u.userid);
         return uid === String(deviceUserId);
       }) ?? null;
     } catch (err) {
@@ -145,7 +143,7 @@ export function registerDeviceAttendanceBridge(args: {
     try {
       for (const logItem of newLogs) {
         const deviceUserIdRaw =
-          logItem.userId ?? logItem.deviceUserId ?? logItem.uid ?? null;
+          logItem.user_id ?? logItem.userId ?? logItem.deviceUserId ?? logItem.uid ?? null;
         const deviceUserId =
           deviceUserIdRaw == null ? null : Number(deviceUserIdRaw);
 
@@ -161,26 +159,45 @@ export function registerDeviceAttendanceBridge(args: {
           continue;
         }
 
-        // ─── Check if this is a trainer (IDs >= TRAINER_ID_THRESHOLD) ───
-        if (deviceUserId >= TRAINER_ID_THRESHOLD) {
-          let trainer = await getTrainerByDeviceUserId(deviceUserId);
+        // ─── Check if this is a trainer or member ───
+        let trainer = await getTrainerByDeviceUserId(deviceUserId);
+        let member = !trainer ? await getMemberByDeviceUserId(deviceUserId) : null;
 
-          // Auto-sync: if trainer not in DB but exists on device, create them
-          if (!trainer) {
-            const deviceUser = await fetchDeviceUser(deviceUserId);
-            if (deviceUser) {
+        // Auto-sync: if user not in DB but exists on device, create them based on device role
+        if (!trainer && !member) {
+          const deviceUser = await fetchDeviceUser(deviceUserId);
+          if (deviceUser) {
+            const isTrainerRole = (deviceUser.role !== undefined && deviceUser.role > 0) ||
+              (deviceUser.privilege !== undefined && deviceUser.privilege > 0);
+            if (isTrainerRole) {
               trainer = await autoCreateTrainerFromDevice(deviceUserId, deviceUser);
+            } else {
+              member = await autoCreateMemberFromDevice(deviceUserId, deviceUser);
             }
           }
+        }
 
-          if (!trainer) {
-            // Send unknown event even during startup sync
-            sendToRenderer("attendance:unknown", {
-              deviceUserId,
-              deviceLog: logItem,
-              startupSync: silent,
-            });
-            continue;
+        if (!trainer && !member) {
+          // Send unknown event even during startup sync
+          sendToRenderer("attendance:unknown", {
+            deviceUserId,
+            deviceLog: logItem,
+            startupSync: silent,
+          });
+          continue;
+        }
+
+        if (trainer) {
+          if (!trainer.deviceSynced) {
+            try {
+              trainer = await prisma.trainer.update({
+                where: { id: trainer.id },
+                data: { deviceSynced: true }
+              });
+              sendToRenderer("trainer:updated", trainer);
+            } catch (err) {
+              deviceLogger.warn("Failed to auto-sync trainer", err);
+            }
           }
 
           const result = await upsertTrainerAttendanceFromBiometric({
@@ -189,6 +206,18 @@ export function registerDeviceAttendanceBridge(args: {
             deviceUserId,
             logItem,
           });
+
+          if (result.ignored) {
+            sendToRenderer("attendance:ignored", {
+              trainer,
+              deviceUserId,
+              attendance: result.attendance,
+              deviceLog: logItem,
+              startupSync: silent,
+              reason: "4_hour_rule",
+            });
+            continue;
+          }
 
           // Always send attendance events to renderer (for startup sync and real-time)
           sendToRenderer(result.ipcEvent, {
@@ -209,24 +238,18 @@ export function registerDeviceAttendanceBridge(args: {
         }
 
         // ─── Regular member flow ───
-        let member = await getMemberByDeviceUserId(deviceUserId);
+        if (!member) continue;
 
-        // Auto-sync: if member not in DB but exists on device, create them
-        if (!member) {
-          const deviceUser = await fetchDeviceUser(deviceUserId);
-          if (deviceUser) {
-            member = await autoCreateMemberFromDevice(deviceUserId, deviceUser);
+        if (!member.deviceSynced) {
+          try {
+            member = await prisma.member.update({
+              where: { id: member.id },
+              data: { deviceSynced: true }
+            });
+            sendToRenderer("member:updated", member);
+          } catch (err) {
+            deviceLogger.warn("Failed to auto-sync member", err);
           }
-        }
-
-        if (!member) {
-          // Send unknown event even during startup sync
-          sendToRenderer("attendance:unknown", {
-            deviceUserId,
-            deviceLog: logItem,
-            startupSync: silent,
-          });
-          continue;
         }
 
         const state = validateMembershipStateFromMember(member);
@@ -266,6 +289,19 @@ export function registerDeviceAttendanceBridge(args: {
           deviceUserId,
           logItem,
         });
+
+        if (result.ignored) {
+          const fullMember = await fetchFullMember(member.id);
+          sendToRenderer("attendance:ignored", {
+            member: fullMember || member,
+            deviceUserId,
+            attendance: result.attendance,
+            deviceLog: logItem,
+            startupSync: silent,
+            reason: "4_hour_rule",
+          });
+          continue;
+        }
 
         // Always send attendance events to renderer (for startup sync and real-time)
         sendToRenderer(result.ipcEvent, {

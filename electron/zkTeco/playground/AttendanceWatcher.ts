@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { ZKClient } from "../ZKClient";
 
 export class AttendanceWatcher {

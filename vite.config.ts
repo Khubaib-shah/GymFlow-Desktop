@@ -22,4 +22,9 @@ export default defineConfig({
       },
     },
   },
+  server: {
+    watch: {
+      ignored: ['**/prisma/*.db', '**/prisma/*.db-journal'],
+    },
+  },
 });

@@ -1,12 +1,15 @@
 import type { DeviceAttendancePayload } from "../types";
 import { deviceLogger } from "../DeviceLogger";
+import { validateAttendanceRecord } from "./attendanceValidation";
 
 function getAttendanceTimestamp(logItem: DeviceAttendancePayload): Date {
-    const raw =
+    let raw =
+        (logItem as any).checkInTime ??
+        (logItem as any).record_time ??
         logItem.timestamp ??
         (logItem as any).attTime ??
-        (logItem as any).checkInTime ??
         (logItem as any).checkTime ??
+        (logItem as any).recordTime ??
         (logItem as any).date;
 
     if (raw == null) {
@@ -46,6 +49,7 @@ export async function upsertTrainerAttendanceFromBiometric(args: {
 }): Promise<{
     ipcEvent: "trainerAttendance:checkin";
     attendance: any;
+    ignored?: boolean;
 }> {
     const { prisma, trainer, logItem, deviceUserId } = args;
 
@@ -57,22 +61,16 @@ export async function upsertTrainerAttendanceFromBiometric(args: {
         checkInTime: checkInTime.toISOString(),
     });
 
-    // Prevent duplicate: check for existing record with exact (trainerId, checkInTime, method)
-    const existing = await prisma.trainerAttendance.findFirst({
-        where: {
-            trainerId: trainer.id,
-            checkInTime,
-            method: "BIOMETRIC",
-        },
+    const validation = await validateAttendanceRecord({
+        prisma,
+        userType: "TRAINER",
+        userId: trainer.id,
+        checkInTime,
+        deviceUserId,
     });
 
-    if (existing) {
-        deviceLogger.info("Duplicate trainer check-in skipped (exact match)", {
-            deviceUserId,
-            trainerId: trainer.id,
-            attendanceId: existing.id,
-        });
-        return { ipcEvent: "trainerAttendance:checkin", attendance: existing };
+    if (validation.status !== "valid") {
+        return { ipcEvent: "trainerAttendance:checkin", attendance: validation.record, ignored: true };
     }
 
     const created = await prisma.trainerAttendance.create({

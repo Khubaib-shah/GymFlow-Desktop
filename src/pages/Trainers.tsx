@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Pagination } from '../components/Pagination';
 
 // Utility functions for masking and formatting
 const formatCNIC = (value: string) => {
@@ -34,6 +35,9 @@ export default function Trainers() {
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 50;
 
   // Profile modal state
   const [profileTrainer, setProfileTrainer] = useState<any>(null);
@@ -105,7 +109,7 @@ export default function Trainers() {
     else dataToSave.dob = null;
 
     if (editingId) {
-      const { id, createdAt, updatedAt, _count, members, ...updateData } = dataToSave;
+      const { id, createdAt, updatedAt, _count, members, fingerprints, attendances, deviceSynced, employeeNo, ...updateData } = dataToSave;
       await (window as any).api.trainers.update(editingId, updateData);
     } else {
       await (window as any).api.trainers.create(dataToSave);
@@ -151,7 +155,9 @@ export default function Trainers() {
         ) : trainers.length === 0 ? (
           <div className="col-span-full text-center py-10 text-gray-500 glass rounded-xl">No trainers found.</div>
         ) : (
-          trainers.map(trainer => (
+          trainers
+            .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+            .map(trainer => (
             <div
               key={trainer.id}
               onClick={() => setProfileTrainer(trainer)}
@@ -222,6 +228,12 @@ export default function Trainers() {
           ))
         )}
       </div>
+      <Pagination
+        currentPage={currentPage}
+        totalItems={trainers.length}
+        itemsPerPage={ITEMS_PER_PAGE}
+        onPageChange={setCurrentPage}
+      />
 
       {/* ── TRAINER PROFILE MODAL ─────────────────────────────────────────── */}
       {profileTrainer && (

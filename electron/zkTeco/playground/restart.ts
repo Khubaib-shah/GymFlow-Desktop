@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { COMMANDS } from "../constants";
 
 const ZKLib = require("node-zklib");

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { COMMANDS } from "../constants.ts";
 import { createUserPacket } from "../helpers/createUserPacket.ts";
 import ZKLib from "node-zklib";

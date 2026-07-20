@@ -3,10 +3,10 @@ import type { DeviceUser } from "../types";
 
 export function createUserPacket(user: DeviceUser): Buffer {
   const packet = Buffer.alloc(72);
-  // -------------------
-  // UID (2 bytes)
-  // -------------------
-  packet.writeUInt16LE(user.uid, 0);
+  // UID (2 bytes) - 0 tells device to auto-assign internal UID
+  // For updates, we should pass the actual internal UID if we have it
+  const internalUid = typeof user.uid === 'number' && user.uid > 0 && user.uid < 65535 ? user.uid : 0;
+  packet.writeUInt16LE(internalUid, 0);
 
   // -------------------
   // Permission
@@ -20,12 +20,12 @@ export function createUserPacket(user: DeviceUser): Buffer {
   // -------------------
   // Password (8 bytes)
   // -------------------
-  packet.write((user.password ?? "").substring(0, 8), 3, "ascii");
+  packet.write((user.password ?? "").substring(0, 8), 3, "utf8");
 
   // -------------------
   // Name (24 bytes)
   // -------------------
-  packet.write(user.name.substring(0, 23), 11, "ascii");
+  packet.write(user.name.substring(0, 23), 11, "utf8");
 
   // -------------------
   // Card Number
@@ -49,7 +49,8 @@ export function createUserPacket(user: DeviceUser): Buffer {
   // -------------------
   // User ID (9 bytes)
   // -------------------
-  packet.write(String(user.userId).substring(0, 8), 48, "ascii");
+  const userIdString = String((user as any).user_id ?? user.userId ?? user.uid ?? "");
+  packet.write(userIdString.substring(0, 8), 48, "utf8");
 
   return packet;
 }

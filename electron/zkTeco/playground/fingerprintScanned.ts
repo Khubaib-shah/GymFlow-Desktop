@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { ZKClient } from "../ZKClient";
 
 (async () => {
@@ -5,7 +6,7 @@ import { ZKClient } from "../ZKClient";
 
   await client.connect({
     enabled: true,
-    deviceType: "zkteco-k70",
+    deviceType: "zkteco-k40",
     ip: "192.168.1.2",
     port: 4370,
     timeout: 10000,

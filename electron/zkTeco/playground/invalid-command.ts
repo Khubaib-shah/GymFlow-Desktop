@@ -1,3 +1,4 @@
+// @ts-nocheck
 const IMZKLib = require("node-zklib");
 
 (async () => {

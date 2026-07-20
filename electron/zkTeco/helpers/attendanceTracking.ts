@@ -32,11 +32,15 @@ export function getAttendanceKey(log: DeviceAttendancePayload): string {
         return `id:${logId}`;
     }
     // Fallback: userId + rounded timestamp
-    const userId = log.userId ?? log.uid ?? log.deviceUserId ?? "unknown";
-    const rawTs = log.timestamp ?? log.attTime ?? log.checkInTime ?? log.recordTime ?? log.date ?? "";
-    const ts = rawTs instanceof Date ? rawTs : new Date(rawTs);
+    const userId = log.user_id ?? log.userId ?? log.uid ?? log.deviceUserId ?? "unknown";
+    const ts = getAttendanceTimestamp(log);
     const rounded = Number.isNaN(ts.getTime()) ? "?" : String(Math.floor(ts.getTime() / 1000));
     return `combo:${userId}-${rounded}`;
+}
+
+export function getAttendanceTimestamp(log: DeviceAttendancePayload): Date {
+    let rawTs = log.checkInTime ?? log.record_time ?? log.timestamp ?? log.attTime ?? log.recordTime ?? log.date ?? "";
+    return rawTs instanceof Date ? rawTs : new Date(rawTs);
 }
 
 /**

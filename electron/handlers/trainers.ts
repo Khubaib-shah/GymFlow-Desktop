@@ -38,14 +38,30 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
   });
 
   ipcMain.handle('trainers:create', async (_: any, data: any) => {
-    // ─── Step 1: Generate next employeeNo ──────────────────────────────
-    const lastTrainer = await prisma.trainer.findFirst({
-      where: { employeeNo: { not: null } },
-      orderBy: { employeeNo: "desc" },
-      select: { employeeNo: true },
-    });
-    const lastTrainerNo = lastTrainer?.employeeNo || TRAINER_ID_OFFSET;
-    const nextEmployeeNo = lastTrainerNo + 1;
+    const TRAINER_START_ID = 1;
+    const TRAINER_MAX_ID = 499;
+    const usedIds = new Set<number>();
+    let nextEmployeeNo: number;
+
+    try {
+
+      const allTrainers = await prisma.trainer.findMany({
+        where: { employeeNo: { not: null, gte: TRAINER_START_ID, lte: TRAINER_MAX_ID } },
+        select: { employeeNo: true },
+      });
+      for (const t of allTrainers) {
+        if (t.employeeNo) usedIds.add(t.employeeNo);
+      }
+
+      let candidate = TRAINER_START_ID;
+      while (usedIds.has(candidate) && candidate <= TRAINER_MAX_ID) {
+        candidate++;
+      }
+      if (candidate > TRAINER_MAX_ID) throw new Error("No available trainer IDs in range 1-499");
+      nextEmployeeNo = candidate;
+    } catch (err) {
+      throw err;
+    }
 
     // ─── Step 2: Save to SQLite with employeeNo ────────────────────────
     let trainer;
@@ -77,56 +93,19 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
         uid: nextEmployeeNo as number,
         id: nextEmployeeNo as number,
         userId: nextEmployeeNo as number,
+        user_id: String(nextEmployeeNo),
         employeeNo: nextEmployeeNo as number,
         name: trainerName,
         fullName: trainerName,
         firstName: data.firstName,
         lastName: data.lastName,
-        privilege: 0,
-        password: "",
+        privilege: 14, // 14 = Super Admin
+        password: "1234",
       };
 
       await deviceManager.addUser(userPayload);
       deviceSynced = true;
 
-      // Start background wait for fingerprint enrollment
-      (async () => {
-        try {
-          deviceLogger.info("Waiting for fingerprint enrollment on device for trainer", {
-            employeeNo: nextEmployeeNo,
-          });
-          const enrolled = await deviceManager.waitForEnrollment(
-            nextEmployeeNo as number,
-            300000,
-            5000,
-          );
-          if (enrolled) {
-            deviceLogger.info("Fingerprint enrolled for trainer on device", {
-              employeeNo: nextEmployeeNo,
-            });
-            try {
-              await prisma.trainer.update({
-                where: { id: trainer.id },
-                data: { deviceSynced: true },
-              });
-            } catch { }
-          } else {
-            deviceLogger.warn("Fingerprint enrollment timed out for trainer", {
-              employeeNo: nextEmployeeNo,
-            });
-          }
-        } catch (err: any) {
-          deviceLogger.error("Error while waiting for trainer enrollment", {
-            employeeNo: nextEmployeeNo,
-            error: err?.message,
-          });
-        }
-      })().catch((err: any) => {
-        deviceLogger.error("Unhandled error in trainer enrollment watcher", {
-          employeeNo: nextEmployeeNo,
-          error: err?.message,
-        });
-      });
 
       // Update sync flag in SQLite
       await prisma.trainer.update({
@@ -147,46 +126,7 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
           " on the device and enroll fingerprint; the app will detect it automatically.";
         deviceLogger.userCreateFailed(nextEmployeeNo as number, trainerName, msg);
 
-        // Start background wait for manual enrollment
-        (async () => {
-          try {
-            deviceLogger.info(
-              "Waiting for manual fingerprint enrollment for trainer on device",
-              { employeeNo: nextEmployeeNo },
-            );
-            const enrolled = await deviceManager.waitForEnrollment(
-              nextEmployeeNo as number,
-              120000,
-              2000,
-            );
-            if (enrolled) {
-              deviceLogger.info(
-                "Manual fingerprint enrolled for trainer on device",
-                { employeeNo: nextEmployeeNo },
-              );
-              try {
-                await prisma.trainer.update({
-                  where: { id: trainer.id },
-                  data: { deviceSynced: true },
-                });
-              } catch { }
-            } else {
-              deviceLogger.warn("Manual fingerprint enrollment timed out for trainer", {
-                employeeNo: nextEmployeeNo,
-              });
-            }
-          } catch (err: any) {
-            deviceLogger.error("Error while waiting for manual trainer enrollment", {
-              employeeNo: nextEmployeeNo,
-              error: err?.message,
-            });
-          }
-        })().catch((err: any) => {
-          deviceLogger.error("Unhandled error in manual trainer enrollment watcher", {
-            employeeNo: nextEmployeeNo,
-            error: err?.message,
-          });
-        });
+
       } else {
         deviceError = msg;
         deviceLogger.userCreateFailed(nextEmployeeNo as number, trainerName, msg);
@@ -208,12 +148,24 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
 
     // If trainer doesn't have an employeeNo yet, generate one and sync
     if (!trainer.employeeNo) {
-      const lastTrainer = await prisma.trainer.findFirst({
-        where: { employeeNo: { not: null } },
-        orderBy: { employeeNo: "desc" },
-        select: { employeeNo: true },
+      const TRAINER_START_ID = 1;
+      const TRAINER_MAX_ID = 499;
+      const usedIds = new Set<number>();
+
+      const allTrainers = await prisma.trainer.findMany({
+        where: { employeeNo: { not: null, gte: TRAINER_START_ID, lte: TRAINER_MAX_ID } },
+        select: { employeeNo: true }
       });
-      const nextEmployeeNo = (lastTrainer?.employeeNo || TRAINER_ID_OFFSET) + 1;
+      for (const t of allTrainers) {
+        if (t.employeeNo) usedIds.add(t.employeeNo);
+      }
+
+      let candidate = TRAINER_START_ID;
+      while (usedIds.has(candidate) && candidate <= TRAINER_MAX_ID) {
+        candidate++;
+      }
+      if (candidate > TRAINER_MAX_ID) throw new Error("No available trainer IDs in range 1-9999");
+      const nextEmployeeNo = candidate;
 
       trainer = await prisma.trainer.update({
         where: { id },
@@ -222,18 +174,20 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
 
       try {
         const trainerName = `${trainer.firstName || ""} ${trainer.lastName || ""}`.trim();
-        await deviceManager.addUser({
+        const userPayload = {
           uid: nextEmployeeNo,
           id: nextEmployeeNo,
           userId: nextEmployeeNo,
+          user_id: String(nextEmployeeNo),
           employeeNo: nextEmployeeNo,
           name: trainerName,
           fullName: trainerName,
-          firstName: trainer.firstName,
-          lastName: trainer.lastName,
-          privilege: 0,
+          firstName: data.firstName || trainer.firstName,
+          lastName: data.lastName || trainer.lastName,
+          privilege: 14, // Super Admin
           password: "",
-        });
+        };
+        await deviceManager.addUser(userPayload);
         await prisma.trainer.update({
           where: { id: trainer.id },
           data: { deviceSynced: true },
@@ -251,6 +205,8 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
         await deviceManager.updateUser({
           userId: trainer.employeeNo,
           name: trainerName,
+          privilege: 14,
+          password: "1234"
         });
         deviceLogger.info("Synced trainer update to device", {
           employeeNo: trainer.employeeNo,

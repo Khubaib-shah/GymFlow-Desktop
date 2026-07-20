@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createUserPacket } from "../helpers/createUserPacket.ts";
 
 const packet = createUserPacket({

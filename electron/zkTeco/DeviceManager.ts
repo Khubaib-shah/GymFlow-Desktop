@@ -8,7 +8,7 @@ import type { DeviceAttendancePayload, DeviceInfoPayload, DeviceStatusPayload, D
 import { createStructuredError, toErrorMessage } from './utils';
 import { deviceLogger } from './DeviceLogger';
 // Helpers
-import { recordDeviceAttendanceLog, isAttendanceLogProcessed } from './helpers/attendanceTracking';
+import { recordDeviceAttendanceLog, isAttendanceLogProcessed, getLastProcessedAttendanceTime } from './helpers/attendanceTracking';
 
 /**
  * Round a Date to second-level precision for reliable dedup keys.
@@ -38,8 +38,55 @@ export class DeviceManager extends EventEmitter {
   private isPolling = false;
   /** Reference to prisma for persistent tracking - set by the app on startup */
   private prisma: any = null;
-  /** In-memory set of already-seen attendance keys (userId:roundedTimestamp) to avoid redundant DB checks */
   private processedKeys: Set<string> = new Set();
+  private realtimeEnabled = false;
+
+  /** Mutex to prevent overlapping commands to the device */
+  private commandPromise: Promise<any> = Promise.resolve();
+
+  private executeCommand<T>(command: () => Promise<T>): Promise<T> {
+    const nextPromise = this.commandPromise.then(() =>
+      command().catch((err) => { throw err; })
+    );
+    this.commandPromise = nextPromise.catch(() => { });
+    return nextPromise;
+  }
+
+  /**
+   * Executes a command safely by temporarily pausing real-time events.
+   * Since zklib-ts doesn't support unbinding listeners cleanly, this reconnects the socket.
+   */
+  private async executeSafeCommand<T>(command: () => Promise<T>): Promise<T> {
+    const wasRealtime = this.realtimeEnabled;
+    if (wasRealtime) {
+      this.client.stopRealTimeLogs();
+      await this.client.disconnect();
+      await this.connect();
+      this.realtimeEnabled = false;
+    }
+
+    try {
+      return await this.executeCommand(command);
+    } finally {
+      if (wasRealtime && this.connected) {
+        // Sync any offline attendance that happened while the realtime listener was paused
+        await this.syncAttendance().catch((err) => {
+          deviceLogger.warn("Failed to sync attendance after executeSafeCommand", err);
+        });
+        
+        // Explicitly restart real-time logs
+        try {
+          await this.client.startRealTimeLogs((record) => {
+            this.processRealTimeAttendance(record).catch(err => deviceLogger.error('Real-time log error', err));
+          });
+          this.realtimeEnabled = true;
+          deviceLogger.info('Real-time event listener registered successfully after safe command');
+        } catch (err) {
+          deviceLogger.warn('Real-time event registration failed after safe command', err);
+        }
+      }
+    }
+  }
 
   /**
    * Clear in-memory caches and reset state.
@@ -80,24 +127,20 @@ export class DeviceManager extends EventEmitter {
     }
 
     try {
-      await this.client.connect(this.settings);
+      await this.executeCommand(() => this.client.connect(this.settings));
+      
+      // Auto-sync device time with PC time
+      try {
+        await this.client.setTime(new Date());
+        deviceLogger.info('Device time synchronized with server');
+      } catch (timeErr) {
+        deviceLogger.warn('Failed to sync device time', timeErr);
+      }
+
       this.connected = true;
       this.consecutiveFailures = 0;
       this.lastConnectedAt = new Date().toISOString();
       this.emitStatusOnce('connected', 'Connected successfully');
-
-      // Register for real-time events after successful connection
-      try {
-        this.client.startRealTimeLogs((record) => {
-          // Process real-time attendance event immediately
-          this.processRealTimeAttendance(record).catch((err) => {
-            deviceLogger.error('Real-time attendance processing error', err);
-          });
-        });
-      } catch (rtErr) {
-        // Real-time event registration is optional; polling will still work
-        deviceLogger.warn('Real-time event registration failed, falling back to polling', rtErr);
-      }
 
       return this.buildStatus('connected', 'Connected successfully');
     } catch (error) {
@@ -137,13 +180,10 @@ export class DeviceManager extends EventEmitter {
       } catch {
         // ignore logging errors
       }
-      const users = await this.getUsers();
-      const attendance = await this.getAttendance();
-
       return {
         ...status,
-        userCount: users.length,
-        attendanceCount: attendance.length,
+        userCount: info.userCount,
+        attendanceCount: info.attendanceCount,
       };
     } catch (error) {
       const message = toErrorMessage(error);
@@ -166,21 +206,44 @@ export class DeviceManager extends EventEmitter {
     if (!this.connected) {
       await this.connect();
     }
-    return this.client.getDeviceInfo();
+    return this.executeCommand(() => this.client.getDeviceInfo());
   }
 
   async getUsers(): Promise<DeviceUserPayload[]> {
     if (!this.connected) {
       await this.connect();
     }
-    return this.client.getUsers();
+    return this.executeSafeCommand(() => this.client.getUsers());
+  }
+
+  async getTemplates(): Promise<any[]> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    return this.executeSafeCommand(() => this.client.getTemplates());
+  }
+
+  async getUsersAndTemplates(): Promise<{ users: DeviceUserPayload[], templates: any[] }> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    return this.executeSafeCommand(async () => {
+      const users = await this.client.getUsers();
+      let templates: any[] = [];
+      try {
+        templates = await this.client.getTemplates();
+      } catch (e) {
+        deviceLogger.warn("Failed to get templates during getUsersAndTemplates", e);
+      }
+      return { users, templates };
+    });
   }
 
   async getAttendance(): Promise<DeviceAttendancePayload[]> {
     if (!this.connected) {
       await this.connect();
     }
-    return this.client.getAttendance();
+    return this.executeSafeCommand(() => this.client.getAttendance());
   }
 
   async addUser(user: DeviceUserPayload): Promise<void> {
@@ -188,7 +251,7 @@ export class DeviceManager extends EventEmitter {
       await this.connect();
     }
     try {
-      await this.client.addUser(user);
+      await this.executeSafeCommand(() => this.client.addUser(user));
     } catch (error) {
       throw new DeviceError(toErrorMessage(error));
     }
@@ -199,7 +262,17 @@ export class DeviceManager extends EventEmitter {
       await this.connect();
     }
     try {
-      await this.client.updateUser(user);
+      // Resolve internal UID before updating
+      const users = await this.getUsers();
+      const targetUserId = String(user.userId ?? user.user_id ?? user.uid ?? user.employeeNo);
+      const deviceUser = users.find((u: any) => String(u.user_id ?? u.uid ?? u.userId ?? u.employeeNo) === targetUserId);
+
+      const payloadToUpdate = { ...user };
+      if (deviceUser && typeof deviceUser.uid === 'number') {
+        payloadToUpdate.uid = deviceUser.uid;
+      }
+
+      await this.executeSafeCommand(() => this.client.updateUser(payloadToUpdate));
     } catch (error) {
       throw new DeviceError(toErrorMessage(error));
     }
@@ -210,7 +283,15 @@ export class DeviceManager extends EventEmitter {
       await this.connect();
     }
     try {
-      await this.client.deleteUser(userId);
+      const users = await this.getUsers();
+      const deviceUser = users.find((u: any) => String(u.user_id ?? u.uid ?? u.userId ?? u.employeeNo) === String(userId));
+
+      let uidToDelete = Number(userId);
+      if (deviceUser && deviceUser.uid != null) {
+        uidToDelete = Number(deviceUser.uid);
+      }
+
+      await this.executeSafeCommand(() => this.client.deleteUser(uidToDelete));
     } catch (error) {
       throw new DeviceError(toErrorMessage(error));
     }
@@ -220,51 +301,26 @@ export class DeviceManager extends EventEmitter {
     if (!this.connected) {
       await this.connect();
     }
-    await this.client.clearAttendance();
+    await this.executeSafeCommand(() => this.client.clearAttendance());
   }
 
   async restartDevice(): Promise<void> {
     if (!this.connected) {
       await this.connect();
     }
-    await this.client.restart();
+    await this.executeSafeCommand(() => this.client.restart());
   }
 
-  /**
-   * Poll the device for a user's fingerprint/templates until detected or timeout.
-   */
-  async waitForEnrollment(employeeNo: number, timeoutMs = 60000, intervalMs = 2000): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        const users = await this.getUsers();
-        const user = users.find((u: any) => {
-          const uid = u.uid ?? u.userId ?? u.id ?? u.employeeNo ?? u.userid ?? u.cardNumber;
-          return String(uid) === String(employeeNo);
-        });
-        if (user) {
-          const hasTemplates = Array.isArray(user.templates) && user.templates.length > 0;
-          const hasFingerprints = Array.isArray(user.fingerprints) && user.fingerprints.length > 0;
-          const hasTemplateFields = Object.keys(user).some(k => /template|finger|fp/i.test(k) && (Array.isArray((user as any)[k]) ? (user as any)[k].length > 0 : Boolean((user as any)[k])));
-          if (hasTemplates || hasFingerprints || hasTemplateFields) return true;
-        }
-      } catch (err) {
-        // ignore and retry until timeout
-      }
-      await new Promise(r => setTimeout(r, intervalMs));
-    }
-    return false;
-  }
 
   /**
    * Process a real-time attendance event from the device.
    * The device pushes these immediately when a fingerprint is scanned.
    */
-  private async processRealTimeAttendance(record: { userId: string; attTime: Date }): Promise<void> {
-    const deviceUserId = Number(record.userId);
+  private async processRealTimeAttendance(record: any): Promise<void> {
+    const deviceUserId = Number(record.user_id ?? record.userId);
     if (Number.isNaN(deviceUserId)) return;
 
-    const checkInTime = roundToSeconds(record.attTime);
+    const checkInTime = this.getLogTimestamp(record);
     const key = this.makeKey(deviceUserId, checkInTime);
 
     // Skip if already processed in this session
@@ -293,6 +349,7 @@ export class DeviceManager extends EventEmitter {
       userId: deviceUserId,
       recordTime: checkInTime,
       attTime: checkInTime,
+      exactTime: record.exactTime,
       method: "BIOMETRIC",
     };
 
@@ -302,6 +359,7 @@ export class DeviceManager extends EventEmitter {
     deviceLogger.info("Real-time attendance event", {
       deviceUserId,
       checkInTime: checkInTime.toISOString(),
+      exactTime: record.exactTime,
     });
   }
 
@@ -309,19 +367,35 @@ export class DeviceManager extends EventEmitter {
    * Extract the timestamp from a device attendance log item.
    * Returns a Date rounded to seconds for consistent dedup.
    */
-  private getLogTimestamp(log: DeviceAttendancePayload): Date {
-    const raw = log.recordTime ?? log.timestamp ?? log.attTime ?? log.checkInTime ?? log.date;
-    if (raw == null) return new Date();
-    if (raw instanceof Date) return roundToSeconds(raw);
-    const d = new Date(raw);
-    return Number.isNaN(d.getTime()) ? new Date() : roundToSeconds(d);
+  private getLogTimestamp(log: DeviceAttendancePayload, isPolling: boolean = false): Date {
+    let raw = log.record_time ?? log.recordTime ?? log.timestamp ?? log.attTime ?? log.checkInTime ?? log.date;
+    const now = new Date();
+    if (raw == null) return roundToSeconds(now);
+
+    let d: Date;
+    if (typeof raw === 'string') {
+      if (raw.endsWith('Z')) raw = raw.replace('Z', '');
+      d = new Date(raw);
+    } else {
+      d = new Date(raw);
+    }
+
+    if (Number.isNaN(d.getTime())) return roundToSeconds(now);
+    
+    // ZKTeco devices often send real-time logs with invalid years (e.g. 2005 or 2000)
+    // If the date is absurdly old, assume it's a real-time log happening right now
+    if (d.getFullYear() < 2020) {
+      return roundToSeconds(now);
+    }
+
+    return roundToSeconds(d);
   }
 
   /**
    * Extract the device user ID from a log item.
    */
   private getLogDeviceUserId(log: DeviceAttendancePayload): number | null {
-    const raw = log.userId ?? log.uid ?? log.deviceUserId ?? log.userSn;
+    const raw = log.user_id ?? log.userId ?? log.uid ?? log.deviceUserId ?? log.userSn;
     if (raw == null) return null;
     const n = Number(raw);
     return Number.isNaN(n) ? null : n;
@@ -338,7 +412,7 @@ export class DeviceManager extends EventEmitter {
   /** Build a key from a log item */
   private getLogKey(log: DeviceAttendancePayload): string {
     const deviceUserId = this.getLogDeviceUserId(log) ?? 0;
-    const checkInTime = this.getLogTimestamp(log);
+    const checkInTime = this.getLogTimestamp(log, true);
     return this.makeKey(deviceUserId, checkInTime);
   }
 
@@ -375,12 +449,30 @@ export class DeviceManager extends EventEmitter {
 
       // Filter out logs that have already been processed (persistent deduplication)
       const unprocessedLogs: DeviceAttendancePayload[] = [];
+      let watermarkTime: Date | null = null;
+
+      if (this.prisma) {
+        const latestDbTime = await getLastProcessedAttendanceTime({ prisma: this.prisma });
+        if (latestDbTime) {
+          // 24-hour buffer to account for out-of-order logs, timezone changes, etc.
+          watermarkTime = new Date(latestDbTime.getTime() - 24 * 60 * 60 * 1000);
+        }
+      }
 
       for (const log of logs) {
         const deviceUserId = this.getLogDeviceUserId(log);
         if (deviceUserId == null) continue;
 
-        const checkInTime = this.getLogTimestamp(log);
+        const checkInTime = this.getLogTimestamp(log, true);
+        log.record_time = checkInTime;
+        log.recordTime = checkInTime;
+        log.timestamp = checkInTime;
+
+        // Fast-path memory skip based on watermark
+        // If this log is older than 24 hours prior to our latest saved log, it's already processed.
+        if (watermarkTime && checkInTime < watermarkTime) {
+          continue;
+        }
 
         // Check in-memory set first (fast)
         const key = this.makeKey(deviceUserId, checkInTime);
@@ -413,7 +505,10 @@ export class DeviceManager extends EventEmitter {
       // Mark all processed logs in the database
       for (const log of unprocessedLogs) {
         const deviceUserId = this.getLogDeviceUserId(log);
-        const checkInTime = this.getLogTimestamp(log);
+        const checkInTime = this.getLogTimestamp(log, true);
+        log.record_time = checkInTime;
+        log.recordTime = checkInTime;
+        log.timestamp = checkInTime;
 
         if (this.prisma && deviceUserId != null) {
           try {
@@ -441,7 +536,7 @@ export class DeviceManager extends EventEmitter {
   private startPolling(): void {
     if (this.pollTimer) return;
     const interval = this.settings.pollInterval || DEFAULT_POLL_INTERVAL_MS;
-    
+
     // Convert to a lightweight watchdog instead of heavy polling.
     // startRealTimeLogs already handles real-time attendance natively.
     this.pollTimer = setInterval(async () => {
@@ -451,6 +546,8 @@ export class DeviceManager extends EventEmitter {
       if (!this.connected) {
         try {
           await this.connect();
+          // After a fresh connect, always sync offline attendance
+          await this.syncAttendance();
         } catch (err) {
           deviceLogger.warn("Watchdog: Connection failed, will retry on next cycle", {
             error: err instanceof Error ? err.message : String(err),
@@ -461,10 +558,26 @@ export class DeviceManager extends EventEmitter {
       } else {
         // Ping the device to ensure connection is actually alive
         try {
-          await this.client.getDeviceInfo();
+          if (!this.client.isSocketAlive()) {
+            throw new Error("Socket is dead");
+          }
+
+          // Try starting real-time if not enabled yet
+          if (!this.realtimeEnabled) {
+            try {
+              await this.client.startRealTimeLogs((record) => {
+                this.processRealTimeAttendance(record).catch(err => deviceLogger.error('Real-time log error', err));
+              });
+              this.realtimeEnabled = true;
+              deviceLogger.info('Real-time event listener registered successfully');
+            } catch (err) {
+              deviceLogger.warn('Real-time event registration failed', err);
+            }
+          }
         } catch (err) {
           deviceLogger.error("Watchdog: Connection died, triggering reconnect", err);
           this.connected = false;
+          this.realtimeEnabled = false;
           this.consecutiveFailures++;
           this.emitStatusOnce('offline', toErrorMessage(err));
         }
@@ -523,7 +636,7 @@ export class DeviceManager extends EventEmitter {
       userCount: undefined,
       attendanceCount: undefined,
       lastConnectedAt: this.lastConnectedAt,
-      deviceName: 'ZKTeco K70',
+      deviceName: 'ZKTeco K40',
     };
   }
 }

@@ -43,6 +43,7 @@ export interface DeviceAttendancePayload {
   attTime?: Date | string;
   checkInTime?: Date | string;
   date?: Date | string;
+  exactTime?: string;
   [key: string]: any;
 }
 

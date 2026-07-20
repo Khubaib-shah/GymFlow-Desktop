@@ -1,12 +1,15 @@
 import type { DeviceAttendancePayload } from "../types";
 import { deviceLogger } from "../DeviceLogger";
+import { validateAttendanceRecord } from "./attendanceValidation";
 
 function getAttendanceTimestamp(logItem: DeviceAttendancePayload): Date {
-  const raw =
+  let raw =
+    (logItem as any).checkInTime ??
+    logItem.record_time ??
     logItem.timestamp ??
     (logItem as any).attTime ??
-    (logItem as any).checkInTime ??
     (logItem as any).checkTime ??
+    (logItem as any).recordTime ??
     (logItem as any).date;
 
   if (raw == null) {
@@ -46,6 +49,7 @@ export async function upsertAttendanceFromBiometric(args: {
 }): Promise<{
   ipcEvent: "attendance:checkin";
   attendance: any;
+  ignored?: boolean;
 }> {
   const { prisma, member, logItem, deviceUserId } = args;
 
@@ -57,23 +61,16 @@ export async function upsertAttendanceFromBiometric(args: {
     checkInTime: checkInTime.toISOString(),
   });
 
-  // Prevent duplicate: check for existing record with exact same (memberId, checkInTime, method)
-  // using second-level precision for reliable dedup
-  const existing = await prisma.attendance.findFirst({
-    where: {
-      memberId: member.id,
-      checkInTime,
-      method: "BIOMETRIC",
-    },
+  const validation = await validateAttendanceRecord({
+    prisma,
+    userType: "MEMBER",
+    userId: member.id,
+    checkInTime,
+    deviceUserId,
   });
 
-  if (existing) {
-    deviceLogger.info("Duplicate check-in skipped (exact match)", {
-      deviceUserId,
-      memberId: member.id,
-      attendanceId: existing.id,
-    });
-    return { ipcEvent: "attendance:checkin", attendance: existing };
+  if (validation.status !== "valid") {
+    return { ipcEvent: "attendance:checkin", attendance: validation.record, ignored: true };
   }
 
   // Always create a new check-in record

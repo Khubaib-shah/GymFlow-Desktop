@@ -1,4 +1,4 @@
-import ZKLib from "node-zklib";
+import ZKLib from "zklib-ts";
 import type {
   DeviceUserPayload,
   DeviceUser,
@@ -101,7 +101,7 @@ export class ZKClient {
         settings.ip,
         settings.port,
         settings.timeout,
-        true,
+        10000,
       );
 
       try {
@@ -154,20 +154,19 @@ export class ZKClient {
     }
   }
 
+  isSocketAlive(): boolean {
+    if (!this.client || !this.client.ztcp || !this.client.ztcp.socket) return false;
+    return !this.client.ztcp.socket.destroyed && this.client.ztcp.socket.writable;
+  }
+
   async testConnection(): Promise<boolean> {
     if (!this.client) {
       throw new Error("Not connected to device");
     }
 
     return this.queueCommand(async () => {
-      const status = await this.client.getSocketStatus?.();
-
-      if (status !== undefined && status !== null) {
-        return status;
-      }
-
+      if (this.isSocketAlive()) return true;
       await this.withTimeout(this.client.getInfo(), 5000);
-
       return true;
     });
   }
@@ -185,7 +184,7 @@ export class ZKClient {
         firmwareVersion: info?.firmwareVersion ?? undefined,
         userCount: info?.userCount ?? undefined,
         attendanceCount: info?.attendanceCount ?? undefined,
-        deviceName: "ZKTeco K70",
+        deviceName: "ZKTeco K40",
       };
     });
   }
@@ -193,11 +192,50 @@ export class ZKClient {
   async getUsers(): Promise<DeviceUserPayload[]> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
-      const res = (await this.withTimeout(
-        this.client.getUsers(),
-        10000,
-      )) as any;
-      return res?.data ?? [];
+      try {
+        const res = (await this.withTimeout(
+          this.client.getUsers(),
+          10000,
+        )) as any;
+        return res?.data ?? [];
+      } catch (err: any) {
+        let errMsg = "";
+        if (err instanceof Error) errMsg = err.message;
+        else if (err && err.err instanceof Error) errMsg = err.err.message;
+        else if (err && typeof err.err === 'string') errMsg = err.err;
+        else errMsg = typeof err === 'string' ? err : JSON.stringify(err);
+
+        if (errMsg.includes("ERROR_IN_UNHANDLE_CMD")) {
+          deviceLogger.info("Device returned ERROR_IN_UNHANDLE_CMD for getUsers. Assuming no users.");
+          return [];
+        }
+        throw err;
+      }
+    });
+  }
+
+  async getTemplates(): Promise<any[]> {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        const res = (await this.withTimeout(
+          this.client.getTemplates(),
+          10000,
+        )) as any;
+        return res?.data ?? [];
+      } catch (err: any) {
+        let errMsg = "";
+        if (err instanceof Error) errMsg = err.message;
+        else if (err && err.err instanceof Error) errMsg = err.err.message;
+        else if (err && typeof err.err === 'string') errMsg = err.err;
+        else errMsg = typeof err === 'string' ? err : JSON.stringify(err);
+
+        if (errMsg.includes("ERROR_IN_UNHANDLE_CMD")) {
+          deviceLogger.info("Device returned ERROR_IN_UNHANDLE_CMD for getTemplates. Assuming no templates.");
+          return [];
+        }
+        throw err;
+      }
     });
   }
 
@@ -215,10 +253,18 @@ export class ZKClient {
           sampleLog: logs[0],
         });
         return logs;
-      } catch (error) {
-        throw new Error(
-          `Failed to read attendance: ${error instanceof Error ? error.message : String(error)}`,
-        );
+      } catch (error: any) {
+        let errMsg = "";
+        if (error instanceof Error) errMsg = error.message;
+        else if (error && error.err instanceof Error) errMsg = error.err.message;
+        else if (error && typeof error.err === 'string') errMsg = error.err;
+        else errMsg = typeof error === 'string' ? error : JSON.stringify(error);
+
+        if (errMsg.includes("ERROR_IN_UNHANDLE_CMD")) {
+          deviceLogger.info("Device returned ERROR_IN_UNHANDLE_CMD for getAttendances. Assuming empty log.");
+          return [];
+        }
+        throw new Error(`Failed to read attendance: ${errMsg}`);
       }
     });
   }
@@ -244,8 +290,7 @@ export class ZKClient {
         );
       } catch (error) {
         throw new Error(
-          `Failed to set user: ${
-            error instanceof Error ? error.message : String(error)
+          `Failed to set user: ${error instanceof Error ? error.message : String(error)
           }`,
         );
       } finally {
@@ -344,94 +389,58 @@ export class ZKClient {
     });
   }
 
+  async setTime(time: Date): Promise<void> {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      await this.withTimeout(this.client.setTime(time), 5000);
+    });
+  }
+
   /**
    * Register for real-time attendance events from the device.
    * The device pushes events immediately when a fingerprint is scanned.
-   * Only one real-time listener can be active at a time.
-   *
-   * Returns an unsubscribe function.
    */
-  startRealTimeLogs(
-    onAttendance: (record: { userId: string; attTime: Date }) => void,
-  ): () => void {
+  async startRealTimeLogs(
+    onAttendance: (record: { userId: string; attTime: Date; exactTime: string }) => void,
+  ): Promise<void> {
     this.stopRealTimeLogs();
 
     if (!this.client) {
       throw new Error("Not connected to device");
     }
 
-    const transport = this.client.zklibTcp || this.client.zklibUdp;
-    if (!transport || !transport.socket) {
-      throw new Error("Device socket not available");
-    }
-
-    // CMD_REG_EVENT = 500, EF_ATTLOG = 1 (from node-zklib constants)
-    const EV_CMD_REG_EVENT = 500;
-    const EV_EF_ATTLOG = 1;
-
-    const handler = (data: Buffer) => {
-      try {
-        // checkNotEventTCP equivalent: verify this is an attendance event
-        if (data.length < 16) return;
-        const commandId = data.readUIntLE(8, 2);
-        const event = data.readUIntLE(12, 2);
-        if (event !== EV_EF_ATTLOG || commandId !== EV_CMD_REG_EVENT) return;
-
-        // Decode 52-byte real-time log record
-        const recvData = data.slice(16);
-        const userId = recvData
-          .slice(0, 9)
-          .toString("ascii")
-          .split("\0")
-          .shift();
-        if (userId == null || userId === "") return;
-
-        const hex = recvData.subarray(26, 32);
-        const year = hex.readUIntLE(0, 1);
-        const month = hex.readUIntLE(1, 1);
-        const date = hex.readUIntLE(2, 1);
-        const hour = hex.readUIntLE(3, 1);
-        const minute = hex.readUIntLE(4, 1);
-        const second = hex.readUIntLE(5, 1);
-        const attTime = new Date(2000 + year, month - 1, date, hour, minute, second);
-
-        if (userId) {
-          onAttendance({ userId, attTime });
-        }
-      } catch {
-        // Ignore malformed packets
-      }
-    };
-
-    transport.socket.on("data", handler);
-
     try {
-      transport.replyId++;
-      const { createTCPHeader } = require("node-zklib/utils");
+      await this.client.getRealTimeLogs((log: any) => {
+        try {
+          if (log.event === 1 && log.payload) { // EF_ATTLOG
+            const buffer = log.payload;
+            const userId = buffer.subarray(0, 24).toString("ascii").split("\0").shift();
+            if (!userId) return;
 
-      const buf = createTCPHeader(
-        EV_CMD_REG_EVENT,
-        transport.sessionId,
-        transport.replyId,
-        Buffer.from([0x01, 0x00, 0x00, 0x00]),
-      );
-      transport.socket.write(buf);
-    } catch (err) {
-      transport.socket.removeListener("data", handler);
-      throw err;
-    }
+            // Read date components directly from buffer bytes
+            const year = buffer.readUInt8(26) + 2000;
+            const month = buffer.readUInt8(27);
+            const day = buffer.readUInt8(28);
+            const hour = buffer.readUInt8(29);
+            const minute = buffer.readUInt8(30);
+            const second = buffer.readUInt8(31);
 
-    this.realTimeCleanup = () => {
-      try {
-        if (transport.socket) {
-          transport.socket.removeListener("data", handler);
+            const attTime = new Date(year, month - 1, day, hour, minute, second);
+
+            const ampm = hour >= 12 ? "pm" : "am";
+            const formattedHours = hour % 12 || 12;
+            const exactTime = `${formattedHours}:${minute.toString().padStart(2, "0")}:${second.toString().padStart(2, "0")} ${ampm}`;
+
+            onAttendance({ userId, attTime, exactTime });
+          }
+        } catch (err) {
+          deviceLogger.error("Error processing real-time log", err);
         }
-      } catch {
-        // ignore
-      }
-    };
-
-    return this.realTimeCleanup!;
+      });
+      deviceLogger.info("Real-time event listener registered successfully");
+    } catch (err) {
+      throw new Error(`Failed to register real-time logs: ${err}`);
+    }
   }
 
   stopRealTimeLogs(): void {

@@ -20,7 +20,7 @@ export function normalizeSettings(raw: Partial<Record<string, any>> = {}): any {
   const pollInterval = Number(raw.pollInterval ?? 5000);
   return {
     enabled: Boolean(raw.enabled),
-    deviceType: raw.deviceType || 'zkteco-k70',
+    deviceType: raw.deviceType || 'zkteco-k40',
     ip: String(raw.ip || '').trim(),
     port: Number.isFinite(port) ? port : 4370,
     timeout: Number.isFinite(timeout) ? timeout : 10000,

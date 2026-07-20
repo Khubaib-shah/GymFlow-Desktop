@@ -21,6 +21,58 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
     }
   });
 
+  ipcMain.handle('device:sync-user', async (_event, employeeNo: number) => {
+    try {
+      const { users: deviceUsers, templates: deviceTemplates } = await deviceManager.getUsersAndTemplates();
+
+      const deviceUser = deviceUsers.find((u: any) => 
+        String(u.user_id ?? u.userId ?? u.uid ?? u.employeeNo) === String(employeeNo)
+      );
+
+      if (!deviceUser) {
+        return { success: false, error: `User with ID ${employeeNo} not found on device` };
+      }
+
+      const isTrainerRole = (deviceUser.role !== undefined && deviceUser.role > 0) || 
+                            (deviceUser.privilege !== undefined && deviceUser.privilege > 0);
+
+      let localId: string | null = null;
+      if (isTrainerRole) {
+        const existing = await prisma.trainer.findFirst({ where: { employeeNo } });
+        if (existing) localId = existing.id;
+      } else {
+        const existing = await prisma.member.findFirst({ where: { employeeNo } });
+        if (existing) localId = existing.id;
+      }
+
+      if (localId && deviceUser.uid != null) {
+        const userTemplates = deviceTemplates.filter(t => t.uid === deviceUser.uid);
+        for (const t of userTemplates) {
+          const existingFp = await prisma.fingerprint.findFirst({
+            where: { uid: t.uid, fid: t.fid }
+          });
+          if (!existingFp) {
+            await prisma.fingerprint.create({
+              data: {
+                uid: t.uid,
+                fid: t.fid,
+                valid: t.valid ?? 1,
+                template: t.template,
+                size: t.size ?? t.template?.length ?? 0,
+                memberId: isTrainerRole ? null : localId,
+                trainerId: isTrainerRole ? localId : null,
+              }
+            });
+          }
+        }
+      }
+
+      return { success: true };
+    } catch (error) {
+      return createStructuredError(error);
+    }
+  });
+
   ipcMain.handle('device:get-status', async () => {
     const settings = deviceManager.getSettings();
     if (!settings.enabled || !settings.ip) {
@@ -167,14 +219,16 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
    */
   ipcMain.handle('device:sync-users', async () => {
     try {
-      const deviceUsers = await deviceManager.getUsers();
+      const { users: deviceUsers, templates: deviceTemplates } = await deviceManager.getUsersAndTemplates();
+
       let membersCreated = 0;
       let trainersCreated = 0;
       let membersSkipped = 0;
       let trainersSkipped = 0;
+      let templatesSynced = 0;
 
       for (const deviceUser of deviceUsers) {
-        const deviceUserIdRaw = deviceUser.userId ?? deviceUser.uid ?? deviceUser.employeeNo;
+        const deviceUserIdRaw = deviceUser.user_id ?? deviceUser.userId ?? deviceUser.uid ?? deviceUser.employeeNo;
         const deviceUserId = deviceUserIdRaw == null ? null : Number(deviceUserIdRaw);
         if (!deviceUserId || Number.isNaN(deviceUserId)) continue;
 
@@ -183,28 +237,64 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
         const firstName = nameParts[0] || `User-${deviceUserId}`;
         const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : null;
 
-        if (deviceUserId >= 10000) {
+        let localId: string | null = null;
+        let isTrainer = false;
+
+        const isTrainerRole = (deviceUser.role !== undefined && deviceUser.role > 0) || 
+                              (deviceUser.privilege !== undefined && deviceUser.privilege > 0);
+
+        if (isTrainerRole) {
           // Trainer range
+          isTrainer = true;
           const existing = await prisma.trainer.findFirst({ where: { employeeNo: deviceUserId } });
           if (existing) {
             trainersSkipped++;
-            continue;
+            localId = existing.id;
+          } else {
+            const created = await prisma.trainer.create({
+              data: { firstName, lastName, employeeNo: deviceUserId, deviceSynced: true },
+            });
+            trainersCreated++;
+            localId = created.id;
           }
-          await prisma.trainer.create({
-            data: { firstName, lastName, employeeNo: deviceUserId, deviceSynced: true },
-          });
-          trainersCreated++;
         } else {
           // Member range
+          isTrainer = false;
           const existing = await prisma.member.findFirst({ where: { employeeNo: deviceUserId } });
           if (existing) {
             membersSkipped++;
-            continue;
+            localId = existing.id;
+          } else {
+            const created = await prisma.member.create({
+              data: { firstName, lastName, employeeNo: deviceUserId, deviceSynced: true, status: "ACTIVE" },
+            });
+            membersCreated++;
+            localId = created.id;
           }
-          await prisma.member.create({
-            data: { firstName, lastName, employeeNo: deviceUserId, deviceSynced: true, status: "ACTIVE" },
-          });
-          membersCreated++;
+        }
+
+        // Sync templates for this user
+        if (localId && deviceUser.uid != null) {
+          const userTemplates = deviceTemplates.filter(t => t.uid === deviceUser.uid);
+          for (const t of userTemplates) {
+             const existingFp = await prisma.fingerprint.findFirst({
+               where: { uid: t.uid, fid: t.fid }
+             });
+             if (!existingFp) {
+               await prisma.fingerprint.create({
+                 data: {
+                   uid: t.uid,
+                   fid: t.fid,
+                   valid: t.valid ?? 1,
+                   template: t.template,
+                   size: t.size ?? t.template?.length ?? 0,
+                   memberId: isTrainer ? null : localId,
+                   trainerId: isTrainer ? localId : null,
+                 }
+               });
+               templatesSynced++;
+             }
+          }
         }
       }
 
@@ -216,6 +306,7 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
           trainersCreated,
           membersSkipped,
           trainersSkipped,
+          templatesSynced,
         },
       };
     } catch (error) {

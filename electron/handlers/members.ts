@@ -78,6 +78,7 @@ export function registerMembersHandlers(
       include: {
         trainer: true,
         plan: true,
+        fingerprints: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -89,6 +90,7 @@ export function registerMembersHandlers(
       include: {
         trainer: true,
         plan: true,
+        fingerprints: true,
         attendances: {
           orderBy: { checkInTime: "desc" },
           take: 10,
@@ -98,17 +100,28 @@ export function registerMembersHandlers(
   });
 
   ipcMain.handle("members:create", async (_: any, data: any) => {
+    delete data.fingerprints;
     // ─── Step 1: Generate next employeeNo ──────────────────────────────
     const isActive = data.status === "ACTIVE";
     let nextEmployeeNo: number | null = null;
 
     if (isActive) {
-      const lastMember = await prisma.member.findFirst({
-        where: { employeeNo: { not: null } },
-        orderBy: { employeeNo: "desc" },
+      const MEMBER_ID_OFFSET = 500;
+      const usedIds = new Set<number>();
+
+      const allMembers = await prisma.member.findMany({
+        where: { employeeNo: { not: null, gte: MEMBER_ID_OFFSET } },
         select: { employeeNo: true },
       });
-      nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+      for (const m of allMembers) {
+        if (m.employeeNo) usedIds.add(m.employeeNo);
+      }
+
+      let candidate = MEMBER_ID_OFFSET;
+      while (usedIds.has(candidate)) {
+        candidate++;
+      }
+      nextEmployeeNo = candidate;
     }
 
     // ─── Step 2: Save to SQLite with employeeNo ────────────────────────
@@ -150,6 +163,7 @@ export function registerMembersHandlers(
         uid: nextEmployeeNo as number,
         id: nextEmployeeNo as number,
         userId: nextEmployeeNo as number,
+        user_id: String(nextEmployeeNo),
         employeeNo: nextEmployeeNo as number,
         name: memberName,
         fullName: memberName,
@@ -165,45 +179,6 @@ export function registerMembersHandlers(
       await deviceManager.addUser(userPayload);
       deviceSynced = true;
 
-      // Start background wait for fingerprint enrollment and log result.
-      (async () => {
-        try {
-          deviceLogger.info("Waiting for fingerprint enrollment on device", {
-            employeeNo: nextEmployeeNo,
-          });
-          const enrolled = await deviceManager.waitForEnrollment(
-            nextEmployeeNo as number,
-            300000,
-            5000,
-          );
-          if (enrolled) {
-            deviceLogger.info("Fingerprint enrolled for user on device", {
-              employeeNo: nextEmployeeNo,
-            });
-            // Optionally update the DB to mark enrollment/provisioning
-            try {
-              await prisma.member.update({
-                where: { id: member.id },
-                data: { deviceSynced: true },
-              });
-            } catch { }
-          } else {
-            deviceLogger.warn("Fingerprint enrollment timed out", {
-              employeeNo: nextEmployeeNo,
-            });
-          }
-        } catch (err: any) {
-          deviceLogger.error("Error while waiting for enrollment", {
-            employeeNo: nextEmployeeNo,
-            error: err?.message,
-          });
-        }
-      })().catch((err: any) => {
-        deviceLogger.error("Unhandled error in enrollment watcher", {
-          employeeNo: nextEmployeeNo,
-          error: err?.message,
-        });
-      });
 
       // Update sync flag in SQLite
       await prisma.member.update({
@@ -225,46 +200,6 @@ export function registerMembersHandlers(
           " on the device and enroll fingerprint; the app will detect it automatically.";
         deviceLogger.userCreateFailed(nextEmployeeNo as number, memberName, msg);
 
-        // Start background wait for manual enrollment (operator creates user on device and enrolls fingerprint)
-        (async () => {
-          try {
-            deviceLogger.info(
-              "Waiting for manual fingerprint enrollment on device",
-              { employeeNo: nextEmployeeNo },
-            );
-            const enrolled = await deviceManager.waitForEnrollment(
-              nextEmployeeNo as number,
-              120000,
-              2000,
-            );
-            if (enrolled) {
-              deviceLogger.info(
-                "Manual fingerprint enrolled for user on device",
-                { employeeNo: nextEmployeeNo },
-              );
-              try {
-                await prisma.member.update({
-                  where: { id: member.id },
-                  data: { deviceSynced: true },
-                });
-              } catch { }
-            } else {
-              deviceLogger.warn("Manual fingerprint enrollment timed out", {
-                employeeNo: nextEmployeeNo,
-              });
-            }
-          } catch (err: any) {
-            deviceLogger.error("Error while waiting for manual enrollment", {
-              employeeNo: nextEmployeeNo,
-              error: err?.message,
-            });
-          }
-        })().catch((err: any) => {
-          deviceLogger.error("Unhandled error in manual enrollment watcher", {
-            employeeNo: nextEmployeeNo,
-            error: err?.message,
-          });
-        });
       } else {
         deviceError = msg;
         deviceLogger.userCreateFailed(nextEmployeeNo as number, memberName, msg);
@@ -280,6 +215,7 @@ export function registerMembersHandlers(
   });
 
   ipcMain.handle("members:update", async (_: any, id: string, data: any) => {
+    delete data.fingerprints;
     let member = await prisma.member.update({
       where: { id },
       data,
@@ -287,12 +223,22 @@ export function registerMembersHandlers(
 
     // If member became ACTIVE and doesn't have an employeeNo, generate one and sync
     if (member.status === "ACTIVE" && !member.employeeNo) {
-      const lastMember = await prisma.member.findFirst({
-        where: { employeeNo: { not: null } },
-        orderBy: { employeeNo: "desc" },
+      const MEMBER_ID_OFFSET = 500;
+      const usedIds = new Set<number>();
+
+      const allMembers = await prisma.member.findMany({
+        where: { employeeNo: { not: null, gte: MEMBER_ID_OFFSET } },
         select: { employeeNo: true },
       });
-      const nextEmployeeNo = (lastMember?.employeeNo || 0) + 1;
+      for (const m of allMembers) {
+        if (m.employeeNo) usedIds.add(m.employeeNo);
+      }
+
+      let candidate = MEMBER_ID_OFFSET;
+      while (usedIds.has(candidate)) {
+        candidate++;
+      }
+      const nextEmployeeNo = candidate;
 
       member = await prisma.member.update({
         where: { id },
@@ -305,6 +251,7 @@ export function registerMembersHandlers(
           uid: nextEmployeeNo,
           id: nextEmployeeNo,
           userId: nextEmployeeNo,
+          user_id: String(nextEmployeeNo),
           employeeNo: nextEmployeeNo,
           name: memberName,
           fullName: memberName,
@@ -322,6 +269,26 @@ export function registerMembersHandlers(
         deviceLogger.info("Assigned ID and synced upgraded member to device", { employeeNo: nextEmployeeNo });
       } catch (error: any) {
         deviceLogger.error("Failed to create upgraded member on device", { error: error.message });
+      }
+    } else if (member.status === "ACTIVE" && member.employeeNo) {
+      try {
+        const memberName = `${member.firstName || ""} ${member.lastName || ""}`.trim();
+        await deviceManager.addUser({
+          uid: member.employeeNo,
+          id: member.employeeNo,
+          userId: member.employeeNo,
+          user_id: String(member.employeeNo),
+          employeeNo: member.employeeNo,
+          name: memberName,
+          fullName: memberName,
+          firstName: member.firstName,
+          lastName: member.lastName,
+          privilege: 0,
+          password: "",
+        });
+        deviceLogger.info("Synced updated member to device", { employeeNo: member.employeeNo });
+      } catch (error: any) {
+        deviceLogger.error("Failed to sync updated member to device", { error: error.message });
       }
     }
 
@@ -395,13 +362,23 @@ export function registerMembersHandlers(
 
   ipcMain.handle("members:getDeviceSyncStatus", async () => {
     try {
-      const deviceUsers = await deviceManager.getUsers();
+      const { users: deviceUsers, templates } = await deviceManager.getUsersAndTemplates();
       const deviceUsersMap = new Map();
+      const fingerprintCounts = new Map();
 
       for (const u of deviceUsers) {
-        const uid = Number(u.uid ?? u.userId);
+        const uid = Number(u.user_id ?? u.uid ?? u.userId);
         if (!Number.isNaN(uid)) {
           deviceUsersMap.set(uid, u);
+        }
+      }
+
+      if (Array.isArray(templates)) {
+        for (const t of templates) {
+          const uid = Number(t.uid ?? t.userId ?? t.user_id);
+          if (!Number.isNaN(uid)) {
+            fingerprintCounts.set(uid, (fingerprintCounts.get(uid) || 0) + 1);
+          }
         }
       }
 
@@ -413,12 +390,14 @@ export function registerMembersHandlers(
 
       for (const m of members) {
         const onDevice = m.employeeNo != null ? deviceUsersMap.has(m.employeeNo) : false;
+        const fingerprintCount = m.employeeNo != null ? (fingerprintCounts.get(m.employeeNo) || 0) : 0;
 
         updatedStatus.push({
           id: m.id,
           employeeNo: m.employeeNo,
           deviceSynced: m.deviceSynced,
           onDevice,
+          fingerprintCount,
         });
       }
 

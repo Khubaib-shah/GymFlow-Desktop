@@ -20,12 +20,6 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
     });
   });
 
-  ipcMain.handle('attendance:getActiveSession', async (_: any, memberId: string) => {
-    // Check-in only: no active session concept needed
-    // Return null to indicate no checkout functionality
-    return null;
-  });
-
   ipcMain.handle('attendance:manualEntry', async (_: any, memberId: string) => {
     const member = await prisma.member.findUnique({ where: { id: memberId } });
     if (!member) throw new Error("Member not found");

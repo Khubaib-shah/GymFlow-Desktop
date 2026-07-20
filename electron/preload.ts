@@ -101,12 +101,14 @@ contextBridge.exposeInMainWorld("api", {
         callback("inactive", data);
       const unknownListener = (_: any, data: any) => callback("unknown", data);
       const trainerCheckinListener = (_: any, data: any) => callback("trainerCheckin", data);
+      const ignoredListener = (_: any, data: any) => callback("ignored", data);
 
       ipcRenderer.on("attendance:checkin", checkinListener);
       ipcRenderer.on("attendance:expired", expiredListener);
       ipcRenderer.on("attendance:inactive", inactiveListener);
       ipcRenderer.on("attendance:unknown", unknownListener);
       ipcRenderer.on("trainerAttendance:checkin", trainerCheckinListener);
+      ipcRenderer.on("attendance:ignored", ignoredListener);
 
       // Return cleanup function
       return () => {
@@ -115,6 +117,7 @@ contextBridge.exposeInMainWorld("api", {
         ipcRenderer.removeListener("attendance:inactive", inactiveListener);
         ipcRenderer.removeListener("attendance:unknown", unknownListener);
         ipcRenderer.removeListener("trainerAttendance:checkin", trainerCheckinListener);
+        ipcRenderer.removeListener("attendance:ignored", ignoredListener);
       };
     },
     onStatusChange: (callback: (status: any) => void) => {
@@ -125,6 +128,7 @@ contextBridge.exposeInMainWorld("api", {
       };
     },
     syncUsers: () => ipcRenderer.invoke("device:sync-users"),
+    syncUser: (userId: number) => ipcRenderer.invoke("device:sync-user", userId),
 
     /**
      * Subscribe to auto-created events from device sync.

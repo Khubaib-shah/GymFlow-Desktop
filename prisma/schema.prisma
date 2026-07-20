@@ -41,8 +41,9 @@ model Member {
   planId String?
   plan   MembershipPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
 
-  attendances Attendance[]
-  payments    Payment[]
+  attendances  Attendance[]
+  payments     Payment[]
+  fingerprints Fingerprint[]
 }
 
 model Trainer {
@@ -62,6 +63,20 @@ model Trainer {
 
   members            Member[]
   trainerAttendances TrainerAttendance[]
+  fingerprints       Fingerprint[]
+}
+
+model Fingerprint {
+  id        String   @id @default(cuid())
+  uid       Int
+  fid       Int
+  valid     Int
+  template  Bytes
+  size      Int
+  memberId  String?
+  trainerId String?
+  member    Member?  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  trainer   Trainer? @relation(fields: [trainerId], references: [id], onDelete: Cascade)
 }
 
 model MembershipPlan {
