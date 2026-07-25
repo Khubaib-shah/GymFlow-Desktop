@@ -23,7 +23,7 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
 
   ipcMain.handle('device:sync-user', async (_event, employeeNo: number) => {
     try {
-      const { users: deviceUsers, templates: deviceTemplates } = await deviceManager.getUsersAndTemplates();
+      const deviceUsers = await deviceManager.getUsers();
 
       const deviceUser = deviceUsers.find((u: any) => 
         String(u.user_id ?? u.userId ?? u.uid ?? u.employeeNo) === String(employeeNo)
@@ -46,15 +46,27 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
       }
 
       if (localId && deviceUser.uid != null) {
-        const userTemplates = deviceTemplates.filter(t => t.uid === deviceUser.uid);
+        const deviceUid = deviceUser.uid;
+        const userTemplates = await deviceManager.getUserTemplates(employeeNo, deviceUid);
+        const activeFids = userTemplates.map(t => t.fid);
+        
+        // Delete fingerprints for this user in the local DB that no longer exist on the device
+        await prisma.fingerprint.deleteMany({
+          where: {
+            uid: deviceUid,
+            fid: { notIn: activeFids }
+          }
+        });
+
         for (const t of userTemplates) {
+          const fpUid = t.uid ?? deviceUid;
           const existingFp = await prisma.fingerprint.findFirst({
-            where: { uid: t.uid, fid: t.fid }
+            where: { uid: fpUid, fid: t.fid }
           });
           if (!existingFp) {
             await prisma.fingerprint.create({
               data: {
-                uid: t.uid,
+                uid: fpUid,
                 fid: t.fid,
                 valid: t.valid ?? 1,
                 template: t.template,
@@ -118,6 +130,50 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
     }
   });
 
+  ipcMain.handle('device:delete-finger', async (_event, employeeNo: number, fid: number) => {
+    try {
+      const user = await prisma.member.findFirst({ where: { employeeNo } }) || 
+                   await prisma.trainer.findFirst({ where: { employeeNo } });
+      
+      let uid: number | undefined;
+
+      if (user) {
+        const fingerprint = await prisma.fingerprint.findFirst({
+          where: {
+            fid,
+            OR: [
+              { memberId: user.id },
+              { trainerId: user.id }
+            ]
+          }
+        });
+
+        if (fingerprint) {
+          uid = fingerprint.uid;
+        }
+      }
+
+      if (uid === undefined) {
+        throw new Error("Could not find the internal device UID for this fingerprint. Please re-sync the user from the device first.");
+      }
+
+      await deviceManager.deleteFinger(uid, fid);
+      
+      // Delete the corresponding fingerprint from the local Prisma database
+      const fingerprintToDelete = await prisma.fingerprint.findFirst({
+        where: { uid, fid }
+      });
+
+      if (fingerprintToDelete) {
+        await prisma.fingerprint.delete({ where: { id: fingerprintToDelete.id } });
+      }
+
+      return { success: true };
+    } catch (error) {
+      return createStructuredError(error);
+    }
+  });
+
   ipcMain.handle('device:update-user', async (_event, payload: any) => {
     try {
       await deviceManager.updateUser(payload);
@@ -139,6 +195,15 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
   ipcMain.handle('device:clear-attendance', async () => {
     try {
       await deviceManager.clearAttendance();
+      return { success: true };
+    } catch (error) {
+      return createStructuredError(error);
+    }
+  });
+
+  ipcMain.handle('device:start-enrollment', async (_event, userId: number, fingerIndex: number = 0) => {
+    try {
+      await deviceManager.startEnrollment(userId, fingerIndex);
       return { success: true };
     } catch (error) {
       return createStructuredError(error);
@@ -217,6 +282,43 @@ export function registerZkTecoDeviceHandlers(ipcMain: IpcMain, prisma: any, getM
    * For each user on the device, if they don't exist in the DB, create them.
    * Returns counts of created members and trainers.
    */
+  ipcMain.handle('device:mark-enrolled', async (_event, employeeNo: number) => {
+    try {
+      // Find the user (either member or trainer)
+      const member = await prisma.member.findFirst({ where: { employeeNo } });
+      const trainer = await prisma.trainer.findFirst({ where: { employeeNo } });
+
+      if (member) {
+        const existing = await prisma.fingerprint.findFirst({ where: { memberId: member.id } });
+        if (!existing) {
+          await prisma.fingerprint.create({
+            data: { uid: employeeNo, fid: 0, valid: 1, template: Buffer.from("dummy-template"), size: 14, memberId: member.id }
+          });
+        }
+      } else if (trainer) {
+        const existing = await prisma.fingerprint.findFirst({ where: { trainerId: trainer.id } });
+        if (!existing) {
+          await prisma.fingerprint.create({
+            data: { uid: employeeNo, fid: 0, valid: 1, template: Buffer.from("dummy-template"), size: 14, trainerId: trainer.id }
+          });
+        }
+      }
+
+      return { success: true };
+    } catch (error) {
+      return createStructuredError(error);
+    }
+  });
+
+  ipcMain.handle('device:start-enroll', async (_event, employeeNo: number, fingerIndex: number = 0) => {
+    try {
+      await deviceManager.startEnrollment(employeeNo, fingerIndex);
+      return { success: true };
+    } catch (error) {
+      return createStructuredError(error);
+    }
+  });
+
   ipcMain.handle('device:sync-users', async () => {
     try {
       const { users: deviceUsers, templates: deviceTemplates } = await deviceManager.getUsersAndTemplates();

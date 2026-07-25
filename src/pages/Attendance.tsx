@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useDialog } from '../components/DialogProvider';
 import { Pagination } from '../components/Pagination';
 
 // ──────────────────────────────────────────────────────────
@@ -34,6 +35,7 @@ function filterByDate(dateString: string, dateFilter: string, customDate: string
 // Member Attendance Tab
 // ──────────────────────────────────────────────────────────
 function MemberAttendanceTab() {
+  const { showAlert, showConfirm } = useDialog();
   const [logs, setLogs] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,14 +70,14 @@ function MemberAttendanceTab() {
     const api = (window as any).api;
     let cleanupListeners: (() => void) | undefined;
     if (api?.device?.onAttendanceEvent) {
-      cleanupListeners = api.device.onAttendanceEvent((type: string, data: any) => {
+      cleanupListeners = api.device.onAttendanceEvent(async (type: string, data: any) => {
         // Only refresh on attendance events (checkin only)
         if (type === 'checkin') {
           fetchLogs();
         } else if (type === 'ignored') {
           // Show toast notification for 4-hour rule
           const name = data?.member?.firstName || data?.trainer?.firstName || 'User';
-          alert(`${name} already checked in recently (4-hour rule).`);
+          await showAlert(`${name} already checked in recently (4-hour rule).`);
         }
       });
     }
@@ -106,7 +108,11 @@ function MemberAttendanceTab() {
       memberSearch === '' ||
       `${m.firstName} ${m.lastName || ''}`.toLowerCase().includes(memberSearch.toLowerCase()) ||
       (m.cnic && m.cnic.includes(memberSearch)) ||
-      (m.phone && m.phone.includes(memberSearch))
+      (m.phone && m.phone.includes(memberSearch)) ||
+      (m.email && m.email.toLowerCase().includes(memberSearch.toLowerCase())) ||
+      (m.id && m.id.toLowerCase().includes(memberSearch.toLowerCase())) ||
+      (m.employeeNo != null && m.employeeNo.toString().toLowerCase().includes(memberSearch.toLowerCase())) ||
+      (m.biometricId && m.biometricId.toLowerCase().includes(memberSearch.toLowerCase()))
     )
   );
 
@@ -115,7 +121,13 @@ function MemberAttendanceTab() {
     const matchesSearch = !term ||
       log.member.firstName.toLowerCase().includes(term) ||
       (log.member.lastName && log.member.lastName.toLowerCase().includes(term)) ||
-      (log.member.cnic && log.member.cnic.toLowerCase().includes(term));
+      ((log.member.firstName + " " + (log.member.lastName || "")).toLowerCase().includes(term)) ||
+      (log.member.cnic && log.member.cnic.toLowerCase().includes(term)) ||
+      (log.member.phone && log.member.phone.toLowerCase().includes(term)) ||
+      (log.member.email && log.member.email.toLowerCase().includes(term)) ||
+      (log.member.id && log.member.id.toLowerCase().includes(term)) ||
+      (log.member.employeeNo != null && log.member.employeeNo.toString().toLowerCase().includes(term)) ||
+      (log.member.biometricId && log.member.biometricId.toLowerCase().includes(term));
     return matchesSearch && filterByDate(log.checkInTime, dateFilter, customDate);
   });
 
@@ -174,19 +186,19 @@ function MemberAttendanceTab() {
                 filteredLogs
                   .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
                   .map(log => {
-                  const checkInDate = new Date(log.checkInTime);
-                  return (
-                    <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
-                      <td className="px-6 py-4 font-medium text-white">{log.member.firstName} {log.member.lastName}</td>
-                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}</td>
-                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString('en-US')}</td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                          }`}>{log.method}</span>
-                      </td>
-                    </tr>
-                  );
-                })
+                    const checkInDate = new Date(log.checkInTime);
+                    return (
+                      <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
+                        <td className="px-6 py-4 font-medium text-white">{log.member.firstName} {log.member.lastName}</td>
+                        <td className="px-6 py-4">{checkInDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}</td>
+                        <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString('en-US')}</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                            }`}>{log.method}</span>
+                        </td>
+                      </tr>
+                    );
+                  })
               )}
             </tbody>
           </table>
@@ -264,6 +276,8 @@ function MemberAttendanceTab() {
 // Trainer Attendance Tab
 // ──────────────────────────────────────────────────────────
 function TrainerAttendanceTab() {
+
+  const { showAlert, showConfirm } = useDialog();
   const [logs, setLogs] = useState<any[]>([]);
   const [trainers, setTrainers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -328,14 +342,22 @@ function TrainerAttendanceTab() {
   const filteredTrainersForSearch = trainers.filter(t =>
     trainerSearch === '' ||
     `${t.firstName} ${t.lastName || ''}`.toLowerCase().includes(trainerSearch.toLowerCase()) ||
-    (t.phone && t.phone.includes(trainerSearch))
+    (t.phone && t.phone.includes(trainerSearch)) ||
+    (t.cnic && t.cnic.includes(trainerSearch)) ||
+    (t.id && t.id.toLowerCase().includes(trainerSearch.toLowerCase())) ||
+    (t.employeeNo != null && t.employeeNo.toString().toLowerCase().includes(trainerSearch.toLowerCase()))
   );
 
   const filteredLogs = logs.filter(log => {
     const term = searchQuery.toLowerCase();
     const matchesSearch = !term ||
       log.trainer.firstName.toLowerCase().includes(term) ||
-      (log.trainer.lastName && log.trainer.lastName.toLowerCase().includes(term));
+      (log.trainer.lastName && log.trainer.lastName.toLowerCase().includes(term)) ||
+      ((log.trainer.firstName + " " + (log.trainer.lastName || "")).toLowerCase().includes(term)) ||
+      (log.trainer.cnic && log.trainer.cnic.toLowerCase().includes(term)) ||
+      (log.trainer.phone && log.trainer.phone.toLowerCase().includes(term)) ||
+      (log.trainer.id && log.trainer.id.toLowerCase().includes(term)) ||
+      (log.trainer.employeeNo != null && log.trainer.employeeNo.toString().toLowerCase().includes(term));
     return matchesSearch && filterByDate(log.checkInTime, dateFilter, customDate);
   });
 
@@ -398,27 +420,27 @@ function TrainerAttendanceTab() {
                 filteredLogs
                   .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
                   .map(log => {
-                  const checkInDate = new Date(log.checkInTime);
-                  return (
-                    <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-sm">
-                            {log.trainer.firstName[0]}{log.trainer.lastName ? log.trainer.lastName[0] : ''}
+                    const checkInDate = new Date(log.checkInTime);
+                    return (
+                      <tr key={log.id} className="hover:bg-[#1a1d24]/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-sm">
+                              {log.trainer.firstName[0]}{log.trainer.lastName ? log.trainer.lastName[0] : ''}
+                            </div>
+                            <span className="font-medium text-white">{log.trainer.firstName} {log.trainer.lastName || ''}</span>
                           </div>
-                          <span className="font-medium text-white">{log.trainer.firstName} {log.trainer.lastName || ''}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-gray-400">{log.trainer.specialty || '—'}</td>
-                      <td className="px-6 py-4">{checkInDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}</td>
-                      <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString('en-US')}</td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                          }`}>{log.method}</span>
-                      </td>
-                    </tr>
-                  );
-                })
+                        </td>
+                        <td className="px-6 py-4 text-gray-400">{log.trainer.specialty || '—'}</td>
+                        <td className="px-6 py-4">{checkInDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}</td>
+                        <td className="px-6 py-4 text-gray-400">{checkInDate.toLocaleDateString('en-US')}</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${log.method === 'BIOMETRIC' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                            }`}>{log.method}</span>
+                        </td>
+                      </tr>
+                    );
+                  })
               )}
             </tbody>
           </table>
@@ -496,6 +518,7 @@ function TrainerAttendanceTab() {
 // Main Attendance Page - Check-In Only
 // ──────────────────────────────────────────────────────────
 export default function Attendance() {
+  const { showAlert, showConfirm } = useDialog();
   const [activeTab, setActiveTab] = useState<'members' | 'trainers'>('members');
 
   return (
@@ -511,8 +534,8 @@ export default function Attendance() {
           <button
             onClick={() => setActiveTab('members')}
             className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'members'
-                ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/30'
-                : 'text-gray-400 hover:text-white'
+              ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/30'
+              : 'text-gray-400 hover:text-white'
               }`}
           >
             <span className="flex items-center gap-2">
@@ -525,8 +548,8 @@ export default function Attendance() {
           <button
             onClick={() => setActiveTab('trainers')}
             className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'trainers'
-                ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
-                : 'text-gray-400 hover:text-white'
+              ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
+              : 'text-gray-400 hover:text-white'
               }`}
           >
             <span className="flex items-center gap-2">

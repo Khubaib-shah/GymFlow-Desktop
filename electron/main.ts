@@ -50,6 +50,14 @@ export const prisma = new PrismaClient({
   }
 });
 
+// Enable WAL mode for concurrent reads/writes and set busy timeout to avoid SQLITE_BUSY
+prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL').catch((err) => {
+  console.error('Failed to enable WAL mode:', err);
+});
+prisma.$queryRawUnsafe('PRAGMA busy_timeout = 5000').catch((err) => {
+  console.error('Failed to set busy_timeout:', err);
+});
+
 let mainWindow: BrowserWindow | null = null;
 
 /** Getter so handlers always have the current mainWindow reference */

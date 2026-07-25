@@ -33,4 +33,28 @@ export function registerAuthHandlers(ipcMain: any, prisma: any) {
     const { password, ...safeOwner } = owner;
     return safeOwner;
   });
+
+  const sessionPath = require('path').join(require('electron').app.getPath('userData'), 'session.json');
+  const fs = require('fs');
+
+  ipcMain.handle('auth:getSession', async () => {
+    try {
+      if (fs.existsSync(sessionPath)) {
+        const data = fs.readFileSync(sessionPath, 'utf-8');
+        return JSON.parse(data).isAuthenticated || false;
+      }
+    } catch (err) {
+      console.error("Failed to read session", err);
+    }
+    return false;
+  });
+
+  ipcMain.handle('auth:setSession', async (_: any, isAuthenticated: boolean) => {
+    try {
+      fs.writeFileSync(sessionPath, JSON.stringify({ isAuthenticated }));
+    } catch (err) {
+      console.error("Failed to write session", err);
+    }
+    return true;
+  });
 }

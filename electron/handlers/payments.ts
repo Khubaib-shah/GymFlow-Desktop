@@ -2,9 +2,10 @@ export function registerPaymentsHandlers(ipcMain: any, prisma: any) {
   ipcMain.handle('payments:getAll', async () => {
     return await prisma.payment.findMany({
       include: {
-        member: true
+        member: { select: { id: true, firstName: true, lastName: true, phone: true } }
       },
-      orderBy: { paymentDate: 'desc' }
+      orderBy: { paymentDate: 'desc' },
+      take: 5000,
     });
   });
 

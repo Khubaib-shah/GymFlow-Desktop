@@ -13,9 +13,8 @@ import Settings from "./pages/Settings";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(
-    localStorage.getItem("isAuthenticated") === "true",
-  );
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const navigate = useNavigate();
 
@@ -44,6 +43,16 @@ export default function App() {
         
         if (type === "checkin") {
           msg = `Welcome ${memberName}!`;
+          // Auto-sync fingerprints if they enrolled on device but DB has none
+          if (data.member?.id && data.deviceUserId) {
+            api.members.getById(data.member.id).then((fullMember: any) => {
+              if (fullMember && (!fullMember.fingerprints || fullMember.fingerprints.length === 0)) {
+                api.device.syncUser(data.deviceUserId)
+                  .then(() => window.dispatchEvent(new Event('gymflow:member_updated')))
+                  .catch((err: any) => console.error("Auto-sync failed", err));
+              }
+            }).catch((err: any) => console.error("Failed to fetch full member", err));
+          }
         } else if (type === "expired") {
           msg = `Dear ${memberName}, your subscription has expired. Please renew your membership.`;
         } else if (type === "inactive") {
@@ -53,6 +62,17 @@ export default function App() {
             `${data.trainer?.firstName || ""} ${data.trainer?.lastName || ""}`.trim() ||
             "Trainer";
           msg = `Welcome ${trainerName}!`;
+          // Auto-sync fingerprints for trainers too
+          if (data.trainer?.id && data.deviceUserId) {
+            api.trainers.getAll().then((trainers: any[]) => {
+              const fullTrainer = trainers.find(t => t.id === data.trainer.id);
+              if (fullTrainer && (!fullTrainer.fingerprints || fullTrainer.fingerprints.length === 0)) {
+                api.device.syncUser(data.deviceUserId)
+                  .then(() => window.dispatchEvent(new Event('gymflow:trainer_updated')))
+                  .catch((err: any) => console.error("Auto-sync failed", err));
+              }
+            }).catch((err: any) => console.error("Failed to fetch trainers", err));
+          }
         }
 
         if (msg) {
@@ -123,7 +143,14 @@ export default function App() {
       // Cancel any ongoing speech
       window.speechSynthesis.cancel();
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    (window as any).api.auth.getSession().then((val: boolean) => {
+      setIsAuthenticated(val);
+      setSessionLoaded(true);
+    });
+  }, []);
 
   if (errorMsg)
     return (
@@ -131,7 +158,7 @@ export default function App() {
         Critical Error: {errorMsg}
       </div>
     );
-  if (isInitializing)
+  if (isInitializing || !sessionLoaded)
     return (
       <div className="flex h-screen items-center justify-center text-white">
         Loading...
@@ -140,7 +167,7 @@ export default function App() {
 
   const handleLogin = () => {
     setIsAuthenticated(true);
-    localStorage.setItem("isAuthenticated", "true");
+    (window as any).api.auth.setSession(true);
     navigate("/");
   };
 
@@ -148,7 +175,7 @@ export default function App() {
     <ErrorBoundary>
       <>
         <Routes>
-          <Route path="/login" element={<Login onLogin={handleLogin} />} />
+          <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login onLogin={handleLogin} />} />
           <Route
             path="/setup"
             element={

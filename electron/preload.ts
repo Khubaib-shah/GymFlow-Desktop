@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld("api", {
     createInitialOwner: (data: any) =>
       ipcRenderer.invoke("auth:createInitialOwner", data),
     checkHasOwner: () => ipcRenderer.invoke("auth:checkHasOwner"),
+    getSession: () => ipcRenderer.invoke("auth:getSession"),
+    setSession: (val: boolean) => ipcRenderer.invoke("auth:setSession", val),
   },
   members: {
     getAll: () => ipcRenderer.invoke("members:getAll"),
@@ -72,6 +74,10 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("device:update-user", payload),
     deleteUser: (userId: number) =>
       ipcRenderer.invoke("device:delete-user", userId),
+    deleteFinger: (employeeNo: number, fid: number) =>
+      ipcRenderer.invoke("device:delete-finger", employeeNo, fid),
+    startEnrollment: (userId: number, fingerIndex?: number) =>
+      ipcRenderer.invoke("device:start-enrollment", userId, fingerIndex),
     clearAttendance: () => ipcRenderer.invoke("device:clear-attendance"),
     restart: () => ipcRenderer.invoke("device:restart"),
     connect: () => ipcRenderer.invoke("device:connect"),
@@ -129,6 +135,8 @@ contextBridge.exposeInMainWorld("api", {
     },
     syncUsers: () => ipcRenderer.invoke("device:sync-users"),
     syncUser: (userId: number) => ipcRenderer.invoke("device:sync-user", userId),
+    markEnrolled: (userId: number) => ipcRenderer.invoke("device:mark-enrolled", userId),
+    startEnroll: (userId: number) => ipcRenderer.invoke("device:start-enroll", userId),
 
     /**
      * Subscribe to auto-created events from device sync.

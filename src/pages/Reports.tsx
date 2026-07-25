@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useDialog } from '../components/DialogProvider';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 
-const VALID_PASSWORDS = ['2008', 'gymflow'];
+const VALID_PASSWORDS = ['2008', 'gymflow', 'miffy123'];
 
 export default function Reports() {
+  const { showAlert, showConfirm } = useDialog();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
@@ -128,9 +130,9 @@ export default function Reports() {
     window.print();
   };
 
-  const exportToCSV = (data: any[], filename: string) => {
+  const exportToCSV = async (data: any[], filename: string) => {
     if (data.length === 0) {
-      alert(`No data to export for ${filename}.`);
+      await showAlert(`No data to export for ${filename}.`);
       return;
     }
     const headers = Object.keys(data[0]).filter(k => typeof data[0][k] !== 'object');
@@ -147,9 +149,9 @@ export default function Reports() {
     link.click();
   };
 
-  const exportRevenue = () => {
+  const exportRevenue = async () => {
     if (filteredPayments.length === 0) {
-      alert('No revenue data to export for the selected period.');
+      await showAlert('No revenue data to export for the selected period.');
       return;
     }
     const rows = filteredPayments.map(p => ({

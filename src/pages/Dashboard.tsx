@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { buildWhatsAppUrl } from '../utils/whatsapp';
 
@@ -32,7 +32,7 @@ export default function Dashboard() {
   }, []);
 
   // Date Filtering Logic
-  const filteredMembers = members.filter(m => {
+  const filteredMembers = useMemo(() => members.filter(m => {
     if (dateFilter === 'all') return true;
 
     const mDate = new Date(m.createdAt);
@@ -62,39 +62,37 @@ export default function Dashboard() {
         mDate.getFullYear() === custom.getFullYear();
     }
     return true;
-  });
+  }), [members, dateFilter, customDate]);
 
   // Stats
-  const activeMembers = filteredMembers.filter(m => m.status === 'ACTIVE').length;
+  const activeMembers = useMemo(() => filteredMembers.filter(m => m.status === 'ACTIVE').length, [filteredMembers]);
 
-  // Alert Members (Expiring in <= 3 days, or already expired)
-  const todayDate = new Date();
-  todayDate.setHours(0, 0, 0, 0);
-
-  const threeDaysFromNow = new Date(todayDate);
-  threeDaysFromNow.setDate(todayDate.getDate() + 3);
-
-  const alertMembers = filteredMembers.filter(m => {
-    if (m.status === 'LEAD' || m.status === 'INACTIVE' || m.status === 'SUSPENDED') return false;
-    if (!m.membershipEnd) return false; // No end date = don't show in alerts
-    const endDate = new Date(m.membershipEnd);
-    return endDate <= threeDaysFromNow;
-  }).sort((a, b) => {
-    const dateA = a.membershipEnd ? new Date(a.membershipEnd).getTime() : 0;
-    const dateB = b.membershipEnd ? new Date(b.membershipEnd).getTime() : 0;
-    return dateA - dateB;
-  });
+  // Alert Members (Already expired)
+  const alertMembers = useMemo(() => {
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    return filteredMembers.filter(m => {
+      if (m.status === 'LEAD' || m.status === 'INACTIVE' || m.status === 'SUSPENDED') return false;
+      if (!m.membershipEnd) return false;
+      const endDate = new Date(m.membershipEnd);
+      return endDate < todayDate;
+    }).sort((a, b) => {
+      const dateA = a.membershipEnd ? new Date(a.membershipEnd).getTime() : 0;
+      const dateB = b.membershipEnd ? new Date(b.membershipEnd).getTime() : 0;
+      return dateA - dateB;
+    });
+  }, [filteredMembers]);
 
   // Recent Members
-  const recentMembers = [...filteredMembers].sort((a, b) =>
+  const recentMembers = useMemo(() => [...filteredMembers].sort((a, b) =>
     new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  ).slice(0, 5);
+  ).slice(0, 5), [filteredMembers]);
 
   // Chart Data
-  const membersByPlan = plans.map(p => ({
+  const membersByPlan = useMemo(() => plans.map(p => ({
     name: p.name,
     count: filteredMembers.filter(m => m.planId === p.id).length
-  }));
+  })), [plans, filteredMembers]);
 
   const handleRenew = (member: any) => {
     setSelectedMember(member);
@@ -219,7 +217,7 @@ export default function Dashboard() {
               <svg className="w-5 h-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
               Alert Members
             </h2>
-            <span className="text-xs bg-orange-500/20 text-orange-400 px-2 py-1 rounded-full font-medium">Expiring Soon / Expired</span>
+            <span className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded-full font-medium">Expired</span>
           </div>
           <div className="flex-1 overflow-auto">
             {alertMembers.length === 0 ? (
@@ -236,13 +234,12 @@ export default function Dashboard() {
                 </thead>
                 <tbody className="divide-y divide-[#2a2e37]">
                   {alertMembers.map(member => {
-                    const isExpired = member.membershipEnd && new Date(member.membershipEnd) < todayDate;
                     return (
                       <tr key={member.id} className="hover:bg-[#1a1d24]/50 transition-colors">
                         <td className="px-4 py-3 font-medium text-white">{member.firstName} {member.lastName}</td>
                         <td className="px-4 py-3">
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${isExpired ? 'bg-red-500/20 text-red-400' : 'bg-orange-500/20 text-orange-400'}`}>
-                            {isExpired ? 'Expired' : 'Expiring'}
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400">
+                            Expired
                           </span>
                         </td>
                         <td className="px-4 py-3 text-gray-400">
@@ -281,7 +278,7 @@ export default function Dashboard() {
         {/* Chart */}
         <div className="glass rounded-xl border border-[#2a2e37] shadow-lg flex flex-col h-[400px]">
           <div className="p-4 border-b border-[#2a2e37] bg-[#1a1d24]/50">
-            <h2 className="text-lg font-bold text-white">Members by Plan</h2>
+            <h2 className="text-lg font-bold text-white">Members by Membership</h2>
           </div>
           <div className="flex-1 p-4">
             <ResponsiveContainer width="100%" height="100%">
@@ -314,7 +311,7 @@ export default function Dashboard() {
                 <tr>
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-4 py-3 font-medium">Joined On</th>
-                  <th className="px-4 py-3 font-medium">Plan</th>
+                  <th className="px-4 py-3 font-medium">Membership</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#2a2e37]">
@@ -346,14 +343,14 @@ export default function Dashboard() {
 
             <form onSubmit={submitRenew} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">Select New Plan</label>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Select New Membership</label>
                 <select
                   required
                   className="input-field"
                   value={selectedPlanId}
                   onChange={e => setSelectedPlanId(e.target.value)}
                 >
-                  <option value="" disabled>Select a plan...</option>
+                  <option value="" disabled>Select a membership...</option>
                   {plans.map(p => (
                     <option key={p.id} value={p.id}>{p.name} ({p.durationDays} Days - Rs {p.price})</option>
                   ))}

@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useDialog } from '../components/DialogProvider';
 import { useLocation, useNavigate } from "react-router-dom";
 import { buildWhatsAppUrl } from "../utils/whatsapp";
 import { Pagination } from "../components/Pagination";
+import { FingerprintSelector } from "../components/FingerprintSelector";
 
 // Utility functions for masking and formatting
 const formatCNIC = (value: string) => {
@@ -40,6 +42,7 @@ const getDaysUntilExpiry = (membershipEnd: string | null) => {
 };
 
 export default function Members() {
+  const { showAlert, showConfirm } = useDialog();
   const [members, setMembers] = useState<any[]>([]);
   const [trainers, setTrainers] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
@@ -55,13 +58,19 @@ export default function Members() {
     dob: "",
     gender: "",
     address: "",
+    joiningDate: "",
     planId: "",
     trainerId: "",
   });
   const [createPaymentMethod, setCreatePaymentMethod] = useState("CASH");
+  const [chargeAdmissionFee, setChargeAdmissionFee] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [syncingUserId, setSyncingUserId] = useState<number | null>(null);
+  const [enrollingUserId, setEnrollingUserId] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRenewing, setIsRenewing] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Renew Modal State
   const [renewModalOpen, setRenewModalOpen] = useState(false);
@@ -79,6 +88,8 @@ export default function Members() {
   }, [searchQuery, statusFilter]);
 
   // Enrollment modal state
+  const [isSelectingFinger, setIsSelectingFinger] = useState(false);
+  const [fingerprintMember, setFingerprintMember] = useState<any>(null);
   const [enrollModalOpen, setEnrollModalOpen] = useState(false);
   const [enrollMemberId, setEnrollMemberId] = useState<string | null>(null);
   const [enrollEmployeeNo, setEnrollEmployeeNo] = useState<number | null>(null);
@@ -112,6 +123,16 @@ export default function Members() {
     }
   }, [location.search, members, navigate]);
 
+  useEffect(() => {
+    const handleMemberUpdated = () => {
+      fetchMembers();
+    };
+    window.addEventListener('gymflow:member_updated', handleMemberUpdated);
+    return () => {
+      window.removeEventListener('gymflow:member_updated', handleMemberUpdated);
+    };
+  }, []);
+
   const [syncLoading, setSyncLoading] = useState(false);
 
   const handleFullSync = async () => {
@@ -119,13 +140,13 @@ export default function Members() {
     try {
       const res = await (window as any).api.device.syncUsers();
       if (res?.success) {
-        alert(`Sync Complete!\n\nMembers Created: ${res.data.membersCreated}\nTrainers Created: ${res.data.trainersCreated}\nTemplates Synced: ${res.data.templatesSynced}`);
+        await showAlert(`Sync Complete!\n\nMembers Created: ${res.data.membersCreated}\nTrainers Created: ${res.data.trainersCreated}\nTemplates Synced: ${res.data.templatesSynced}`);
       } else {
-        alert(`Sync failed: ${res?.error || "Unknown error"}`);
+        await showAlert(`Sync failed: ${res?.error || "Unknown error"}`);
       }
       await fetchMembers();
     } catch (e: any) {
-      alert(`Error during sync: ${e.message}`);
+      await showAlert(`Error during sync: ${e.message}`);
     } finally {
       setSyncLoading(false);
     }
@@ -139,13 +160,105 @@ export default function Members() {
       if (res?.success) {
         // Just refresh the data silently
       } else {
-        alert(`Failed to sync member: ${res?.error || "Unknown error"}`);
+        await showAlert(`Failed to sync member: ${res?.error || "Unknown error"}`);
       }
       await fetchMembers();
     } catch (e: any) {
-      alert(`Error during sync: ${e.message}`);
+      await showAlert(`Error during sync: ${e.message}`);
     } finally {
       setSyncingUserId(null);
+    }
+  };
+
+  const handleEnrollUser = async (member: any) => {
+    if (!member.employeeNo) return;
+    setSyncingUserId(member.employeeNo);
+    try {
+      await (window as any).api.device.syncUser(member.employeeNo);
+      const updatedMember = await (window as any).api.members.getById(member.id);
+      setFingerprintMember(updatedMember || member);
+    } catch (e: any) {
+      console.warn("Could not fetch latest fingerprints", e);
+      setFingerprintMember(member);
+    } finally {
+      setSyncingUserId(null);
+      setIsSelectingFinger(true);
+    }
+  };
+
+  const deleteDeviceFingerprint = async (fingerIndex: number) => {
+    if (!fingerprintMember || !fingerprintMember.employeeNo) return;
+    try {
+      const res = await (window as any).api.device.deleteFinger(fingerprintMember.employeeNo, fingerIndex);
+      if (res.success) {
+        // Optimistically update the UI by removing the fingerprint from the current member
+        const updatedFingerprints = fingerprintMember.fingerprints?.filter((f: any) => f.fid !== fingerIndex) || [];
+        setFingerprintMember({ ...fingerprintMember, fingerprints: updatedFingerprints });
+        // Also refresh the member list in the background
+        fetchMembers();
+      } else {
+        alert("Failed to delete fingerprint from device: " + (res.error?.message || "Unknown error"));
+      }
+    } catch (e: any) {
+      alert("Error deleting fingerprint: " + e.message);
+    }
+  };
+
+  const startDeviceEnrollment = async (fingerIndex: number) => {
+    if (!fingerprintMember || !fingerprintMember.employeeNo) return;
+    setIsSelectingFinger(false);
+    setEnrollingUserId(fingerprintMember.employeeNo);
+    try {
+      await (window as any).api.device.startEnrollment(fingerprintMember.employeeNo, fingerIndex);
+      setEnrollMemberId(fingerprintMember.id);
+      setEnrollEmployeeNo(fingerprintMember.employeeNo);
+      setEnrollMessage(`Device is ready for fingerprint enrollment. Please place finger ${fingerIndex} on the device 3 times.`);
+      setEnrollCountdown(120);
+      setEnrollModalOpen(true);
+
+      const initialFingerprintCount = fingerprintMember.fingerprints?.length || 0;
+      let isSyncing = false;
+      if (enrollTimerRef.current) window.clearInterval(enrollTimerRef.current);
+      enrollTimerRef.current = window.setInterval(async () => {
+        if (isSyncing) return;
+        isSyncing = true;
+        try {
+          const refreshed = await (window as any).api.members.getById(fingerprintMember.id);
+          if ((refreshed?.fingerprints?.length || 0) > initialFingerprintCount) {
+            window.clearInterval(enrollTimerRef.current!);
+            enrollTimerRef.current = null;
+            if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current);
+            enrollCountdownRef.current = null;
+            setEnrollModalOpen(false);
+            fetchMembers();
+            return;
+          }
+          await (window as any).api.device.syncUser(fingerprintMember.employeeNo);
+        } catch {
+          // ignore
+        } finally {
+          isSyncing = false;
+        }
+      }, 5000) as unknown as number;
+
+      if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current);
+      enrollCountdownRef.current = window.setInterval(() => {
+        setEnrollCountdown((c) => {
+          if (c <= 1) {
+            if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current!);
+            enrollCountdownRef.current = null;
+            if (enrollTimerRef.current) window.clearInterval(enrollTimerRef.current);
+            enrollTimerRef.current = null;
+            setEnrollModalOpen(false);
+            return 0;
+          }
+          return c - 1;
+        });
+      }, 1000) as unknown as number;
+    } catch (error: any) {
+      await showAlert(`Failed to start enrollment: ${error.message}`);
+    } finally {
+      setEnrollingUserId(null);
     }
   };
 
@@ -187,6 +300,7 @@ export default function Members() {
         cnic: member.cnic || "",
         gender: member.gender || "",
         address: member.address || "",
+        joiningDate: member.membershipStart ? new Date(member.membershipStart).toISOString().split("T")[0] : "",
       });
       setEditingId(member.id);
     } else {
@@ -200,10 +314,12 @@ export default function Members() {
         dob: "",
         gender: "",
         address: "",
+        joiningDate: new Date().toISOString().split("T")[0],
         planId: "",
         trainerId: "",
       });
       setCreatePaymentMethod("CASH");
+      setChargeAdmissionFee(true);
       setEditingId(null);
     }
     setErrorMsg("");
@@ -216,6 +332,7 @@ export default function Members() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMsg("");
 
     // Validations
@@ -258,105 +375,170 @@ export default function Members() {
     if (!editingId && dataToSave.status === "ACTIVE" && dataToSave.planId) {
       const selectedPlan = plans.find((p: any) => p.id === dataToSave.planId);
       if (selectedPlan) {
-        const today = new Date();
-        dataToSave.membershipStart = today.toISOString();
-        const endDate = new Date(today);
+        const startDate = dataToSave.joiningDate ? new Date(dataToSave.joiningDate) : new Date();
+        dataToSave.membershipStart = startDate.toISOString();
+        const endDate = new Date(startDate);
         endDate.setDate(endDate.getDate() + selectedPlan.durationDays);
         dataToSave.membershipEnd = endDate.toISOString();
       }
     }
 
-    if (editingId) {
-      const {
-        id,
-        createdAt,
-        updatedAt,
-        plan,
-        trainer,
-        attendances,
-        employeeNo,
-        deviceSynced,
-        fingerprints,
-        _count,
-        ...updateData
-      } = dataToSave;
-      await (window as any).api.members.update(editingId, updateData);
-    } else {
-      const newMember = await (window as any).api.members.create(dataToSave);
+    delete dataToSave.joiningDate;
 
-      // If new active member with a plan, create initial payment (plan fee + admission fee)
-      if (newMember && dataToSave.planId && dataToSave.status === "ACTIVE") {
-        const plan = plans.find((p: any) => p.id === dataToSave.planId);
-        const admissionFee = parseFloat(
-          localStorage.getItem("admission_fee") || "0",
-        );
-        const totalAmount = (plan?.price || 0) + admissionFee;
-        await (window as any).api.payments.create({
-          memberId: newMember.id,
-          planId: dataToSave.planId,
-          amount: totalAmount,
-          method: createPaymentMethod,
-          notes:
-            admissionFee > 0
-              ? `Admission Fee (Rs ${admissionFee}) + Plan Fee (Rs ${plan?.price || 0})`
-              : "Initial Subscription",
-        });
-      }
+    setIsSubmitting(true);
+    try {
+      if (editingId) {
+        const {
+          id,
+          createdAt,
+          updatedAt,
+          plan,
+          trainer,
+          attendances,
+          employeeNo,
+          deviceSynced,
+          fingerprints,
+          _count,
+          ...updateData
+        } = dataToSave;
+        await (window as any).api.members.update(editingId, updateData);
+      } else {
+        const newMember = await (window as any).api.members.create(dataToSave);
 
-      // Device sync feedback
-      if (
-        newMember &&
-        newMember.deviceSynced === false &&
-        newMember.deviceError
-      ) {
-        // If error mentions enrollment/ enroll operator, open enrollment modal and poll member record
-        const msg = String(newMember.deviceError || "").toLowerCase();
-        // Open operator enrollment modal for any device errors that indicate remote/manual enrollment
+        // If new active member with a plan, create initial payment (plan fee + admission fee)
+        if (newMember && dataToSave.planId && dataToSave.status === "ACTIVE") {
+          const plan = plans.find((p: any) => p.id === dataToSave.planId);
+          const baseAdmissionFee = parseFloat(
+            localStorage.getItem("admission_fee") || "0",
+          );
+          const admissionFee = chargeAdmissionFee ? baseAdmissionFee : 0;
+          const totalAmount = (plan?.price || 0) + admissionFee;
+          await (window as any).api.payments.create({
+            memberId: newMember.id,
+            planId: dataToSave.planId,
+            amount: totalAmount,
+            method: createPaymentMethod,
+            notes:
+              admissionFee > 0
+                ? `Admission Fee (Rs ${admissionFee}) + Plan Fee (Rs ${plan?.price || 0})`
+                : "Initial Subscription",
+          });
+        }
+
+        // Device sync feedback
         if (
-          msg.includes("enroll") ||
-          msg.includes("create user") ||
-          msg.includes("manual") ||
-          msg.includes("remote") ||
-          msg.includes("not supported")
+          newMember &&
+          newMember.deviceSynced === false &&
+          newMember.deviceError
         ) {
+          // If error mentions enrollment/ enroll operator, open enrollment modal and poll member record
+          const msg = String(newMember.deviceError || "").toLowerCase();
+          // Open operator enrollment modal for any device errors that indicate remote/manual enrollment
+          if (
+            msg.includes("enroll") ||
+            msg.includes("create user") ||
+            msg.includes("manual") ||
+            msg.includes("remote") ||
+            msg.includes("not supported")
+          ) {
+            setEnrollMemberId(newMember.id);
+            setEnrollEmployeeNo(newMember.employeeNo ?? null);
+            const uiMessage =
+              newMember.deviceError ||
+              newMember.error ||
+              "Please enroll on device";
+            setEnrollMessage(uiMessage);
+            setEnrollCountdown(120);
+            setEnrollModalOpen(true);
+            console.info(
+              "[Members UI] Opening enrollment modal for member",
+              newMember.id,
+              "employeeNo",
+              newMember.employeeNo,
+              "msg:",
+              msg,
+              "uiMessage:",
+              uiMessage,
+            );
+            try {
+              await showAlert(`Please enroll fingerprint on the device for user ID ${newMember.employeeNo}.
+\n${uiMessage}`);
+            } catch { }
+
+            // start polling member record for deviceSynced
+            if (enrollTimerRef.current)
+              window.clearInterval(enrollTimerRef.current);
+            enrollTimerRef.current = window.setInterval(async () => {
+              try {
+                const refreshed = await (window as any).api.members.getById(
+                  newMember.id,
+                );
+                if (refreshed?.deviceSynced) {
+                  // success
+                  window.clearInterval(enrollTimerRef.current!);
+                  enrollTimerRef.current = null;
+                  if (enrollCountdownRef.current)
+                    window.clearInterval(enrollCountdownRef.current);
+                  enrollCountdownRef.current = null;
+                  setEnrollModalOpen(false);
+                  fetchMembers();
+                  return;
+                }
+              } catch {
+                // ignore
+              }
+            }, 2000) as unknown as number;
+
+            // countdown timer
+            if (enrollCountdownRef.current)
+              window.clearInterval(enrollCountdownRef.current);
+            enrollCountdownRef.current = window.setInterval(() => {
+              setEnrollCountdown((c) => {
+                if (c <= 1) {
+                  // timeout
+                  if (enrollCountdownRef.current)
+                    window.clearInterval(enrollCountdownRef.current!);
+                  enrollCountdownRef.current = null;
+                  if (enrollTimerRef.current)
+                    window.clearInterval(enrollTimerRef.current);
+                  enrollTimerRef.current = null;
+                  setEnrollModalOpen(false);
+                  return 0;
+                }
+                return c - 1;
+              });
+            }, 1000) as unknown as number;
+          } else {
+            await showAlert(
+              `⚠️ Member saved locally but could not sync to device.\n\nReason: ${newMember.deviceError}\n\nYou can sync later from Settings.`,
+            );
+          }
+        } else if (newMember && newMember.deviceSynced === true && newMember.status === "ACTIVE") {
           setEnrollMemberId(newMember.id);
           setEnrollEmployeeNo(newMember.employeeNo ?? null);
-          const uiMessage =
-            newMember.deviceError ||
-            newMember.error ||
-            "Please enroll on device";
-          setEnrollMessage(uiMessage);
+          setEnrollMessage("Device is ready for fingerprint enrollment. Please place finger on the device 3 times.");
           setEnrollCountdown(120);
           setEnrollModalOpen(true);
-          console.info(
-            "[Members UI] Opening enrollment modal for member",
-            newMember.id,
-            "employeeNo",
-            newMember.employeeNo,
-            "msg:",
-            msg,
-            "uiMessage:",
-            uiMessage,
-          );
-          try {
-            window.alert(`Please enroll fingerprint on the device for user ID ${newMember.employeeNo}.
-\n${uiMessage}`);
-          } catch { }
 
-          // start polling member record for deviceSynced
-          if (enrollTimerRef.current)
-            window.clearInterval(enrollTimerRef.current);
+          try {
+            await (window as any).api.device.startEnroll(newMember.employeeNo);
+            console.info("[Members UI] Triggered remote enrollment on device for", newMember.employeeNo);
+          } catch (err) {
+            console.error("[Members UI] Failed to trigger device enrollment:", err);
+          }
+
+          let isSyncing = false;
+          if (enrollTimerRef.current) window.clearInterval(enrollTimerRef.current);
           enrollTimerRef.current = window.setInterval(async () => {
+            if (isSyncing) return;
+            isSyncing = true;
             try {
-              const refreshed = await (window as any).api.members.getById(
-                newMember.id,
-              );
-              if (refreshed?.deviceSynced) {
-                // success
+              await (window as any).api.device.syncUser(newMember.employeeNo);
+              const refreshed = await (window as any).api.members.getById(newMember.id);
+              if (refreshed?.fingerprints?.length > 0) {
                 window.clearInterval(enrollTimerRef.current!);
                 enrollTimerRef.current = null;
-                if (enrollCountdownRef.current)
-                  window.clearInterval(enrollCountdownRef.current);
+                if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current);
                 enrollCountdownRef.current = null;
                 setEnrollModalOpen(false);
                 fetchMembers();
@@ -364,21 +546,18 @@ export default function Members() {
               }
             } catch {
               // ignore
+            } finally {
+              isSyncing = false;
             }
-          }, 2000) as unknown as number;
+          }, 5000) as unknown as number;
 
-          // countdown timer
-          if (enrollCountdownRef.current)
-            window.clearInterval(enrollCountdownRef.current);
+          if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current);
           enrollCountdownRef.current = window.setInterval(() => {
             setEnrollCountdown((c) => {
               if (c <= 1) {
-                // timeout
-                if (enrollCountdownRef.current)
-                  window.clearInterval(enrollCountdownRef.current!);
+                if (enrollCountdownRef.current) window.clearInterval(enrollCountdownRef.current!);
                 enrollCountdownRef.current = null;
-                if (enrollTimerRef.current)
-                  window.clearInterval(enrollTimerRef.current);
+                if (enrollTimerRef.current) window.clearInterval(enrollTimerRef.current);
                 enrollTimerRef.current = null;
                 setEnrollModalOpen(false);
                 return 0;
@@ -386,21 +565,26 @@ export default function Members() {
               return c - 1;
             });
           }, 1000) as unknown as number;
-        } else {
-          alert(
-            `⚠️ Member saved locally but could not sync to device.\n\nReason: ${newMember.deviceError}\n\nYou can sync later from Settings.`,
-          );
         }
       }
+      setIsModalOpen(false);
+      fetchMembers();
+    } catch (err: any) {
+      setErrorMsg(err.message || "An error occurred while saving.");
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsModalOpen(false);
-    fetchMembers();
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm("Are you sure you want to delete this member?")) {
-      await (window as any).api.members.delete(id);
-      fetchMembers();
+    if (await showConfirm("Are you sure you want to delete this member?")) {
+      setDeletingId(id);
+      try {
+        await (window as any).api.members.delete(id);
+        await fetchMembers();
+      } finally {
+        setDeletingId(null);
+      }
     }
   };
 
@@ -413,75 +597,86 @@ export default function Members() {
 
   const submitRenew = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedRenewMember || !selectedPlanId) return;
+    if (!selectedRenewMember || !selectedPlanId || isRenewing) return;
 
-    const plan = plans.find((p: any) => p.id === selectedPlanId);
-    if (!plan) return;
+    setIsRenewing(true);
+    try {
+      const plan = plans.find((p: any) => p.id === selectedPlanId);
+      if (!plan) return;
 
-    let newStartDate = new Date();
-    if (selectedRenewMember.membershipEnd) {
-      const currentEnd = new Date(selectedRenewMember.membershipEnd);
-      if (currentEnd > new Date()) {
-        newStartDate = currentEnd;
+      let newStartDate = new Date();
+      if (selectedRenewMember.membershipEnd) {
+        const currentEnd = new Date(selectedRenewMember.membershipEnd);
+        if (currentEnd > new Date()) {
+          newStartDate = currentEnd;
+        }
       }
+
+      const newEndDate = new Date(newStartDate);
+      newEndDate.setDate(newEndDate.getDate() + plan.durationDays);
+
+      await (window as any).api.members.update(selectedRenewMember.id, {
+        planId: selectedPlanId,
+        membershipStart:
+          selectedRenewMember.membershipEnd &&
+            new Date(selectedRenewMember.membershipEnd) > new Date()
+            ? selectedRenewMember.membershipStart
+            : new Date().toISOString(),
+        membershipEnd: newEndDate.toISOString(),
+        status: "ACTIVE",
+      });
+
+      // Calculate total: plan price + admission fee for SUSPENDED members
+      const isSuspended = selectedRenewMember.status === "SUSPENDED";
+      const admissionFee = isSuspended
+        ? parseFloat(localStorage.getItem("admission_fee") || "0")
+        : 0;
+      const totalAmount = plan.price + admissionFee;
+
+      await (window as any).api.payments.create({
+        memberId: selectedRenewMember.id,
+        planId: selectedPlanId,
+        amount: totalAmount,
+        method: paymentMethod,
+        notes:
+          isSuspended && admissionFee > 0
+            ? `Subscription Renewal + Re-Admission Fee (Rs ${admissionFee})`
+            : "Subscription Renewal",
+      });
+
+      setRenewModalOpen(false);
+      fetchMembers();
+    } catch (err: any) {
+      await showAlert(err.message || "An error occurred during renewal.");
+    } finally {
+      setIsRenewing(false);
     }
-
-    const newEndDate = new Date(newStartDate);
-    newEndDate.setDate(newEndDate.getDate() + plan.durationDays);
-
-    await (window as any).api.members.update(selectedRenewMember.id, {
-      planId: selectedPlanId,
-      membershipStart:
-        selectedRenewMember.membershipEnd &&
-          new Date(selectedRenewMember.membershipEnd) > new Date()
-          ? selectedRenewMember.membershipStart
-          : new Date().toISOString(),
-      membershipEnd: newEndDate.toISOString(),
-      status: "ACTIVE",
-    });
-
-    // Calculate total: plan price + admission fee for SUSPENDED members
-    const isSuspended = selectedRenewMember.status === "SUSPENDED";
-    const admissionFee = isSuspended
-      ? parseFloat(localStorage.getItem("admission_fee") || "0")
-      : 0;
-    const totalAmount = plan.price + admissionFee;
-
-    await (window as any).api.payments.create({
-      memberId: selectedRenewMember.id,
-      planId: selectedPlanId,
-      amount: totalAmount,
-      method: paymentMethod,
-      notes:
-        isSuspended && admissionFee > 0
-          ? `Subscription Renewal + Re-Admission Fee (Rs ${admissionFee})`
-          : "Subscription Renewal",
-    });
-
-    setRenewModalOpen(false);
-    fetchMembers();
   };
 
-  const statusCounts = {
+  const statusCounts = useMemo(() => ({
     ALL: members.length,
     LEAD: members.filter((m) => m.status === "LEAD").length,
     ACTIVE: members.filter((m) => m.status === "ACTIVE").length,
     EXPIRED: members.filter((m) => m.status === "EXPIRED").length,
     INACTIVE: members.filter((m) => m.status === "INACTIVE").length,
     SUSPENDED: members.filter((m) => m.status === "SUSPENDED").length,
-  };
+  }), [members]);
 
-  const filteredMembers = members.filter((m) => {
+  const filteredMembers = useMemo(() => members.filter((m) => {
     const term = searchQuery.toLowerCase();
     const matchesSearch =
       m.firstName.toLowerCase().includes(term) ||
       (m.lastName && m.lastName.toLowerCase().includes(term)) ||
+      ((m.firstName + " " + (m.lastName || "")).toLowerCase().includes(term)) ||
       (m.cnic && m.cnic.toLowerCase().includes(term)) ||
       (m.phone && m.phone.toLowerCase().includes(term)) ||
-      (m.email && m.email.toLowerCase().includes(term));
+      (m.email && m.email.toLowerCase().includes(term)) ||
+      (m.id && m.id.toLowerCase().includes(term)) ||
+      (m.employeeNo != null && m.employeeNo.toString().toLowerCase().includes(term)) ||
+      (m.biometricId && m.biometricId.toLowerCase().includes(term));
     const matchesStatus = statusFilter === "ALL" || m.status === statusFilter;
     return matchesSearch && matchesStatus;
-  });
+  }), [members, searchQuery, statusFilter]);
 
   const filterConfig: {
     key: string;
@@ -637,7 +832,7 @@ export default function Members() {
                 <th className="px-6 py-4 font-medium">Name &amp; CNIC</th>
                 <th className="px-6 py-4 font-medium">Contact</th>
                 <th className="px-6 py-4 font-medium">Status</th>
-                <th className="px-6 py-4 font-medium">Plan &amp; Trainer</th>
+                <th className="px-6 py-4 font-medium">Membership &amp; Trainer</th>
                 <th className="px-6 py-4 font-medium">Device</th>
                 <th className="px-6 py-4 font-medium text-right">Actions</th>
               </tr>
@@ -690,8 +885,8 @@ export default function Members() {
                               <div className="font-medium text-white">
                                 {member.firstName} {member.lastName || ""}
                               </div>
-                              <div className="text-xs text-gray-500">
-                                {member.cnic || "No CNIC"}
+                              <div className="text-xs text-gray-500 mt-1">
+                                {member.cnic || "No CNIC"} &bull; Joined: {new Date(member.createdAt).toLocaleDateString()}
                               </div>
                             </div>
                           </div>
@@ -708,16 +903,16 @@ export default function Members() {
                           <div className="flex flex-col gap-1">
                             <span
                               className={`px-2.5 py-1 rounded-full text-xs font-medium w-fit ${member.status === "ACTIVE"
-                                  ? "bg-green-500/10 text-green-400 border border-green-500/20"
-                                  : member.status === "LEAD"
-                                    ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                                    : member.status === "EXPIRED"
-                                      ? "bg-red-500/10 text-red-400 border border-red-500/20"
-                                      : member.status === "INACTIVE"
-                                        ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
-                                        : member.status === "SUSPENDED"
-                                          ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
-                                          : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
+                                ? "bg-green-500/10 text-green-400 border border-green-500/20"
+                                : member.status === "LEAD"
+                                  ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                                  : member.status === "EXPIRED"
+                                    ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                                    : member.status === "INACTIVE"
+                                      ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
+                                      : member.status === "SUSPENDED"
+                                        ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
+                                        : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
                                 }`}
                             >
                               {member.status}
@@ -731,7 +926,7 @@ export default function Members() {
                         </td>
                         <td className="px-6 py-4">
                           <div className="text-gray-300">
-                            {member.plan?.name || "No Plan"}
+                            {member.plan?.name || "No Membership"}
                           </div>
                           <div className="text-xs text-gray-500">
                             Trainer:{" "}
@@ -813,14 +1008,25 @@ export default function Members() {
                               </a>
                             )}
                             {member.status !== 'LEAD' && (
-                              <button
-                                onClick={() => handleSyncUser(member)}
-                                disabled={syncingUserId === member.employeeNo || !member.employeeNo}
-                                className={`text-blue-400 hover:text-blue-300 transition-colors font-medium text-sm ${(syncingUserId === member.employeeNo || !member.employeeNo) ? "opacity-50 cursor-not-allowed" : ""
-                                  }`}
-                              >
-                                {syncingUserId === member.employeeNo ? "Syncing..." : "Sync"}
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => handleSyncUser(member)}
+                                  disabled={syncingUserId === member.employeeNo || !member.employeeNo}
+                                  className={`text-blue-400 hover:text-blue-300 transition-colors font-medium text-sm ${(syncingUserId === member.employeeNo || !member.employeeNo) ? "opacity-50 cursor-not-allowed" : ""
+                                    }`}
+                                >
+                                  {syncingUserId === member.employeeNo ? "Syncing..." : "Sync"}
+                                </button>
+                                {member.deviceSynced && (
+                                  <button
+                                    onClick={() => handleEnrollUser(member)}
+                                    disabled={enrollingUserId === member.employeeNo || syncingUserId === member.employeeNo}
+                                    className={`text-green-400 hover:text-green-300 transition-colors font-medium text-sm ${enrollingUserId === member.employeeNo || syncingUserId === member.employeeNo ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                  >
+                                    {enrollingUserId === member.employeeNo ? "Enrolling..." : (syncingUserId === member.employeeNo ? "Loading..." : "Enroll")}
+                                  </button>
+                                )}
+                              </>
                             )}
                             <button
                               onClick={() => openRenewModal(member)}
@@ -836,9 +1042,10 @@ export default function Members() {
                             </button>
                             <button
                               onClick={() => handleDelete(member.id)}
-                              className="text-gray-400 hover:text-red-400 transition-colors text-sm"
+                              disabled={deletingId === member.id}
+                              className={`text-gray-400 hover:text-red-400 transition-colors text-sm ${deletingId === member.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
-                              Delete
+                              {deletingId === member.id ? 'Deleting...' : 'Delete'}
                             </button>
                           </div>
                         </td>
@@ -1016,7 +1223,7 @@ export default function Members() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-400 mb-1">
-                    Plan
+                    Membership
                   </label>
                   <select
                     className="input-field"
@@ -1030,7 +1237,7 @@ export default function Members() {
                       setFormData({ ...formData, planId, status });
                     }}
                   >
-                    <option value="">No Plan</option>
+                    <option value="">No Membership</option>
                     {plans.map((p: any) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
@@ -1050,12 +1257,30 @@ export default function Members() {
                     }
                   >
                     <option value="">No Trainer</option>
-                    {trainers.map((t) => (
+                    {trainers.map((t: any) => (
                       <option key={t.id} value={t.id}>
                         {t.firstName} {t.lastName}
                       </option>
                     ))}
                   </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">
+                    Joining Date (Optional)
+                  </label>
+                  <input
+                    type="date"
+                    className="input-field"
+                    value={formData.joiningDate || ""}
+                    onChange={(e) =>
+                      setFormData({ ...formData, joiningDate: e.target.value })
+                    }
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Used to calculate the end date of the membership plan if they started in the past.
+                  </p>
                 </div>
               </div>
 
@@ -1065,9 +1290,10 @@ export default function Members() {
                   const selectedPlan = plans.find(
                     (p: any) => p.id === formData.planId,
                   );
-                  const admissionFee = parseFloat(
+                  const baseAdmissionFee = parseFloat(
                     localStorage.getItem("admission_fee") || "0",
                   );
+                  const admissionFee = chargeAdmissionFee ? baseAdmissionFee : 0;
                   const total = (selectedPlan?.price || 0) + admissionFee;
                   return (
                     <div className="border-t border-[#2a2e37] pt-4 space-y-3">
@@ -1104,16 +1330,24 @@ export default function Members() {
                       </div>
                       <div className="bg-[#0f1115] p-3 rounded-lg border border-[#2a2e37] text-sm space-y-1">
                         <div className="flex justify-between text-gray-400">
-                          <span>Plan Fee:</span>
+                          <span>Membership Fee:</span>
                           <span className="text-white">
                             Rs {selectedPlan?.price?.toFixed(2) || "0.00"}
                           </span>
                         </div>
-                        {admissionFee > 0 && (
-                          <div className="flex justify-between text-gray-400">
-                            <span>Admission Fee:</span>
-                            <span className="text-white">
-                              Rs {admissionFee.toFixed(2)}
+                        {baseAdmissionFee > 0 && (
+                          <div className="flex justify-between items-center text-gray-400">
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={chargeAdmissionFee}
+                                onChange={(e) => setChargeAdmissionFee(e.target.checked)}
+                                className="rounded border-gray-600 bg-gray-700 text-primary-500 focus:ring-primary-500"
+                              />
+                              <span>Admission Fee:</span>
+                            </label>
+                            <span className={chargeAdmissionFee ? "text-white" : "text-gray-500 line-through"}>
+                              Rs {baseAdmissionFee.toFixed(2)}
                             </span>
                           </div>
                         )}
@@ -1163,21 +1397,32 @@ export default function Members() {
                       </div>
                     </div>
 
-                    <div className="flex justify-end gap-3">
+                    <div className="flex justify-end gap-3 mt-6">
                       <button
-                        type="button"
                         onClick={closeEnrollModal}
-                        className="btn-secondary"
+                        className="px-4 py-2 border border-zinc-700 text-zinc-300 rounded-md hover:bg-zinc-800 transition-colors"
                       >
                         Cancel
                       </button>
                       <button
-                        type="button"
-                        onClick={() => {
-                          closeEnrollModal();
-                          fetchMembers();
+                        onClick={async () => {
+                          try {
+                            await (window as any).api.device.markEnrolled(enrollEmployeeNo);
+                            setEnrollModalOpen(false);
+                            setEnrollMemberId(null);
+                            // toast.success("Marked as enrolled manually.");
+                            fetchMembers();
+                          } catch (err) {
+                            // toast.error("Failed to mark as enrolled.");
+                          }
                         }}
-                        className="btn-primary"
+                        className="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 transition-colors"
+                      >
+                        Already Enrolled
+                      </button>
+                      <button
+                        onClick={closeEnrollModal}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
                       >
                         I'll enroll later
                       </button>
@@ -1191,11 +1436,22 @@ export default function Members() {
                   type="button"
                   onClick={() => setIsModalOpen(false)}
                   className="btn-secondary"
+                  disabled={isSubmitting}
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
-                  Save Member
+                <button type="submit" disabled={isSubmitting} className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                  {isSubmitting ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Member"
+                  )}
                 </button>
               </div>
             </form>
@@ -1232,7 +1488,7 @@ export default function Members() {
                 <form onSubmit={submitRenew} className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-400 mb-1">
-                      Select New Plan
+                      Select New Membership
                     </label>
                     <select
                       required
@@ -1241,7 +1497,7 @@ export default function Members() {
                       onChange={(e) => setSelectedPlanId(e.target.value)}
                     >
                       <option value="" disabled>
-                        Select a plan...
+                        Select a membership...
                       </option>
                       {plans.map((p: any) => (
                         <option key={p.id} value={p.id}>
@@ -1279,7 +1535,7 @@ export default function Members() {
                   {selectedPlan && (
                     <div className="bg-[#0f1115] p-3 rounded-lg border border-[#2a2e37] text-sm space-y-1">
                       <div className="flex justify-between text-gray-400">
-                        <span>Plan Fee:</span>
+                        <span>Membership Fee:</span>
                         <span className="text-white">
                           Rs {selectedPlan.price.toFixed(2)}
                         </span>
@@ -1304,15 +1560,26 @@ export default function Members() {
                       type="button"
                       onClick={() => setRenewModalOpen(false)}
                       className="btn-secondary"
+                      disabled={isRenewing}
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
-                      className="btn-primary"
-                      disabled={!selectedPlanId || plans.length === 0}
+                      className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={!selectedPlanId || plans.length === 0 || isRenewing}
                     >
-                      Confirm Renewal
+                      {isRenewing ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Processing...
+                        </>
+                      ) : (
+                        "Confirm Renewal"
+                      )}
                     </button>
                   </div>
                 </form>
@@ -1320,6 +1587,20 @@ export default function Members() {
             </div>
           );
         })()}
+
+      {isSelectingFinger && fingerprintMember && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <FingerprintSelector
+            enrolledFingers={fingerprintMember.fingerprints?.map((f: any) => f.fid) || []}
+            onSelectFinger={startDeviceEnrollment}
+            onDeleteFinger={deleteDeviceFingerprint}
+            onCancel={() => {
+              setIsSelectingFinger(false);
+              setFingerprintMember(null);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

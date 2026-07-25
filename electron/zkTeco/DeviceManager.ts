@@ -39,7 +39,11 @@ export class DeviceManager extends EventEmitter {
   /** Reference to prisma for persistent tracking - set by the app on startup */
   private prisma: any = null;
   private processedKeys: Set<string> = new Set();
+  private static readonly MAX_PROCESSED_KEYS = 50000;
   private realtimeEnabled = false;
+
+  /** Tracks pending enrollments to map real-time events to the correct finger index */
+  private pendingEnrollments: Map<number, number> = new Map();
 
   /** Mutex to prevent overlapping commands to the device */
   private commandPromise: Promise<any> = Promise.resolve();
@@ -73,12 +77,17 @@ export class DeviceManager extends EventEmitter {
         await this.syncAttendance().catch((err) => {
           deviceLogger.warn("Failed to sync attendance after executeSafeCommand", err);
         });
-        
+
         // Explicitly restart real-time logs
         try {
-          await this.client.startRealTimeLogs((record) => {
-            this.processRealTimeAttendance(record).catch(err => deviceLogger.error('Real-time log error', err));
-          });
+          await this.client.startRealTimeLogs(
+            (record) => {
+              this.processRealTimeAttendance(record).catch(err => deviceLogger.error('Real-time log error', err));
+            },
+            (userId) => {
+              this.addRealTimeFingerprint(userId).catch(err => deviceLogger.error('Real-time enroll error', err));
+            }
+          );
           this.realtimeEnabled = true;
           deviceLogger.info('Real-time event listener registered successfully after safe command');
         } catch (err) {
@@ -128,7 +137,7 @@ export class DeviceManager extends EventEmitter {
 
     try {
       await this.executeCommand(() => this.client.connect(this.settings));
-      
+
       // Auto-sync device time with PC time
       try {
         await this.client.setTime(new Date());
@@ -157,17 +166,22 @@ export class DeviceManager extends EventEmitter {
     if (this.reconnectTimer) clearInterval(this.reconnectTimer);
     this.pollTimer = null;
     this.reconnectTimer = null;
-    this.client.stopRealTimeLogs();
-    await this.client.disconnect();
+    if (this.client) {
+      try {
+        this.client.stopRealTimeLogs();
+        await this.client.disconnect();
+      } catch (e) {
+        // ignore disconnect errors
+      }
+    }
     this.connected = false;
     this.emitStatusOnce('disconnected', 'Device disconnected');
   }
 
   async reconnect(): Promise<DeviceStatusPayload> {
     this.disposed = false;
-    this.client.stopRealTimeLogs();
-    await this.client.disconnect();
-    this.connected = false;
+    await this.disconnect();
+    this.disposed = false; // ensure disposed is false so connect can start polling if needed
     return this.connect();
   }
 
@@ -223,12 +237,74 @@ export class DeviceManager extends EventEmitter {
     return this.executeSafeCommand(() => this.client.getTemplates());
   }
 
+  async getUserTemplates(userId: string | number, uid?: number): Promise<any[]> {
+    if (!this.connected) {
+      await this.connect();
+    }
+
+    return this.executeSafeCommand(async () => {
+      const templates: any[] = [];
+      const uidString = userId.toString();
+      let deviceUid = uid;
+
+      try {
+        if (deviceUid === undefined) {
+          // Find the user's internal UID first
+          const usersRes = await this.client.getUsers();
+          // zklib-ts might return an array directly or { data: [] }
+          const usersList = Array.isArray(usersRes) ? usersRes : (usersRes as any).data || [];
+
+          const deviceUser = usersList.find((u: any) =>
+            u.userId === uidString || u.user_id === uidString || u.uid.toString() === uidString
+          );
+
+          if (!deviceUser) {
+            deviceLogger.warn(`User ${uidString} not found when fetching templates`);
+            return templates;
+          }
+
+          deviceUid = deviceUser.uid;
+
+          // CRITICAL: Prevent socket buffer pollution from getUsers() by flushing the TCP stream.
+          // Using freeData() is not enough on some devices (like K40). We must physically reconnect.
+          await this.client.disconnect();
+          await this.client.connect(this.settings);
+        }
+
+        const templatesRes = await this.client.getTemplates();
+        const templatesList = Array.isArray(templatesRes) ? templatesRes : (templatesRes as any).data || [];
+
+        for (const t of templatesList) {
+          if (t.uid === deviceUid) {
+            templates.push({
+              fid: t.fid,
+              valid: t.valid,
+              size: t.size || t.template?.length || 0,
+              template: t.template,
+              uid: t.uid
+            });
+          }
+        }
+      } catch (err: any) {
+        deviceLogger.error(`Failed to fetch templates for ${uidString}`, err);
+      }
+
+      return templates;
+    });
+  }
+
   async getUsersAndTemplates(): Promise<{ users: DeviceUserPayload[], templates: any[] }> {
     if (!this.connected) {
       await this.connect();
     }
     return this.executeSafeCommand(async () => {
       const users = await this.client.getUsers();
+
+      // CRITICAL: Prevent socket buffer pollution from getUsers() by flushing the TCP stream.
+      // Using freeData() is not enough on some devices (like K40). We must physically reconnect.
+      await this.client.disconnect();
+      await this.client.connect(this.settings);
+
       let templates: any[] = [];
       try {
         templates = await this.client.getTemplates();
@@ -252,6 +328,18 @@ export class DeviceManager extends EventEmitter {
     }
     try {
       await this.executeSafeCommand(() => this.client.addUser(user));
+    } catch (error) {
+      throw new DeviceError(toErrorMessage(error));
+    }
+  }
+
+  async deleteFinger(uid: number, fid: number): Promise<void> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      // Use the newly added deleteFinger in ZKClient directly without polluting the socket
+      await this.executeSafeCommand(() => (this.client as any).deleteFinger(uid, fid));
     } catch (error) {
       throw new DeviceError(toErrorMessage(error));
     }
@@ -311,6 +399,18 @@ export class DeviceManager extends EventEmitter {
     await this.executeSafeCommand(() => this.client.restart());
   }
 
+  async startEnrollment(userId: number | string, fingerIndex: number = 0): Promise<void> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      this.pendingEnrollments.set(Number(userId), fingerIndex);
+      await this.executeSafeCommand(() => this.client.startEnrollment(userId, fingerIndex));
+    } catch (error) {
+      throw new DeviceError(toErrorMessage(error));
+    }
+  }
+
 
   /**
    * Process a real-time attendance event from the device.
@@ -338,8 +438,11 @@ export class DeviceManager extends EventEmitter {
           checkInTime,
           method: "BIOMETRIC",
         });
-      } catch {
-        // ignore duplicate errors
+      } catch (err: any) {
+        // P2002 = Prisma unique constraint violation (expected duplicate) — safe to ignore
+        if (err?.code !== 'P2002') {
+          deviceLogger.error('Failed to record device attendance log', err);
+        }
       }
     }
 
@@ -356,11 +459,136 @@ export class DeviceManager extends EventEmitter {
     // Emit to bridge for processing
     this.emit('attendance', [logItem], false);
 
+    // Auto-mark enrolled: if they checked in, they must have a fingerprint
+    if (this.prisma) {
+      try {
+        await this.ensureFingerprintEnrolled(deviceUserId);
+      } catch (err) {
+        deviceLogger.error('Failed to auto-enroll fingerprint on check-in', err);
+      }
+    }
+
     deviceLogger.info("Real-time attendance event", {
       deviceUserId,
       checkInTime: checkInTime.toISOString(),
       exactTime: record.exactTime,
     });
+  }
+
+  /**
+   * Called when a user successfully checks in, ensuring they have at least 1 fingerprint record.
+   */
+  private async ensureFingerprintEnrolled(deviceUserId: number): Promise<void> {
+    if (!this.prisma) return;
+    const member = await this.prisma.member.findFirst({ where: { employeeNo: deviceUserId } });
+
+    let templateBuffer = Buffer.alloc(0);
+    let templateSize = 0;
+    let valid = 1;
+
+    deviceLogger.info(`Auto-enroll check: skipping real template fetch for user ${deviceUserId} finger 0 to prevent socket timeout. Using empty buffer.`);
+
+    if (member) {
+      const existing = await this.prisma.fingerprint.findFirst({ where: { memberId: member.id } });
+      if (!existing) {
+        deviceLogger.info(`Auto-enrolling fingerprint for member ${member.id} based on check-in`);
+        await this.prisma.fingerprint.create({
+          data: { uid: deviceUserId, fid: 0, valid: valid, template: templateBuffer, size: templateSize, memberId: member.id }
+        });
+      }
+    } else {
+      const trainer = await this.prisma.trainer.findFirst({ where: { employeeNo: deviceUserId } });
+      if (trainer) {
+        const existing = await this.prisma.fingerprint.findFirst({ where: { trainerId: trainer.id } });
+        if (!existing) {
+          deviceLogger.info(`Auto-enrolling fingerprint for trainer ${trainer.id} based on check-in`);
+          await this.prisma.fingerprint.create({
+            data: { uid: deviceUserId, fid: 0, valid: valid, template: templateBuffer, size: templateSize, trainerId: trainer.id }
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Called by the real-time event hook when an EF_ENROLLUSER or EF_ENROLLFINGER event is received.
+   * Increments the fingerprint count for the user.
+   */
+  public async addRealTimeFingerprint(userId: string): Promise<void> {
+    if (!this.prisma) return;
+    const deviceUserId = Number(userId);
+    if (Number.isNaN(deviceUserId)) return;
+
+    deviceLogger.info(`Real-time enrollment event received for user ${userId}`);
+
+    const member = await this.prisma.member.findFirst({ where: { employeeNo: deviceUserId } });
+
+    let templateBuffer = Buffer.alloc(0);
+    let templateSize = 0;
+    let valid = 1;
+
+    // Check pending enrollments to find the target finger index, or fallback to count
+    let existingCount = 0;
+    if (member) {
+      existingCount = await this.prisma.fingerprint.count({ where: { memberId: member.id } });
+    } else {
+      const trainer = await this.prisma.trainer.findFirst({ where: { employeeNo: deviceUserId } });
+      if (trainer) {
+        existingCount = await this.prisma.fingerprint.count({ where: { trainerId: trainer.id } });
+      }
+    }
+
+    const targetFid = this.pendingEnrollments.get(deviceUserId) ?? existingCount;
+    this.pendingEnrollments.delete(deviceUserId);
+
+    try {
+      deviceLogger.info(`Attempting to fetch real template for user ${deviceUserId} finger ${targetFid}`);
+      // Safely fetch over a new connection to avoid real-time socket timeout
+      const fingerData = await this.executeSafeCommand(() => this.client.getUserTemplate(deviceUserId.toString(), targetFid));
+      if (fingerData && fingerData.template) {
+        templateBuffer = fingerData.template;
+        templateSize = fingerData.size ?? fingerData.template.length;
+        valid = fingerData.valid ?? 1;
+        deviceLogger.info(`Successfully fetched real template, size: ${templateSize}`);
+      }
+    } catch (err) {
+      deviceLogger.warn(`Could not fetch real template for user ${deviceUserId} finger ${targetFid}. Using empty buffer instead of dummy text.`, err);
+    }
+
+    if (member) {
+      const existing = await this.prisma.fingerprint.findFirst({
+        where: { memberId: member.id, fid: targetFid }
+      });
+      if (existing) {
+        await this.prisma.fingerprint.update({
+          where: { id: existing.id },
+          data: { template: templateBuffer, size: templateSize, valid: valid }
+        });
+      } else {
+        await this.prisma.fingerprint.create({
+          data: { uid: deviceUserId, fid: targetFid, valid: valid, template: templateBuffer, size: templateSize, memberId: member.id }
+        });
+      }
+      deviceLogger.info(`Added/updated fingerprint #${targetFid} for member ${member.id}`);
+    } else {
+      const trainer = await this.prisma.trainer.findFirst({ where: { employeeNo: deviceUserId } });
+      if (trainer) {
+        const existing = await this.prisma.fingerprint.findFirst({
+          where: { trainerId: trainer.id, fid: targetFid }
+        });
+        if (existing) {
+          await this.prisma.fingerprint.update({
+            where: { id: existing.id },
+            data: { template: templateBuffer, size: templateSize, valid: valid }
+          });
+        } else {
+          await this.prisma.fingerprint.create({
+            data: { uid: deviceUserId, fid: targetFid, valid: valid, template: templateBuffer, size: templateSize, trainerId: trainer.id }
+          });
+        }
+        deviceLogger.info(`Added/updated fingerprint #${targetFid} for trainer ${trainer.id}`);
+      }
+    }
   }
 
   /**
@@ -376,12 +604,27 @@ export class DeviceManager extends EventEmitter {
     if (typeof raw === 'string') {
       if (raw.endsWith('Z')) raw = raw.replace('Z', '');
       d = new Date(raw);
+    } else if (raw instanceof Date) {
+      if (isPolling) {
+        // zklib-ts incorrectly treats device time as UTC during bulk sync.
+        // We construct a new Date using its UTC values to enforce the local timezone.
+        d = new Date(
+          raw.getUTCFullYear(),
+          raw.getUTCMonth(),
+          raw.getUTCDate(),
+          raw.getUTCHours(),
+          raw.getUTCMinutes(),
+          raw.getUTCSeconds()
+        );
+      } else {
+        d = new Date(raw);
+      }
     } else {
       d = new Date(raw);
     }
 
     if (Number.isNaN(d.getTime())) return roundToSeconds(now);
-    
+
     // ZKTeco devices often send real-time logs with invalid years (e.g. 2005 or 2000)
     // If the date is absurdly old, assume it's a real-time log happening right now
     if (d.getFullYear() < 2020) {
@@ -459,6 +702,22 @@ export class DeviceManager extends EventEmitter {
         }
       }
 
+      // --- Batch dedup: fetch all existing logs in one query instead of N+1 ---
+      let existingKeysSet = new Set<string>();
+      if (this.prisma && watermarkTime) {
+        try {
+          const existingLogs = await this.prisma.deviceAttendanceLog.findMany({
+            where: { checkInTime: { gte: watermarkTime } },
+            select: { deviceUserId: true, checkInTime: true },
+          });
+          for (const el of existingLogs) {
+            existingKeysSet.add(this.makeKey(el.deviceUserId, el.checkInTime));
+          }
+        } catch (err) {
+          deviceLogger.warn('Failed to batch-query existing logs, falling back to per-log checks', err);
+        }
+      }
+
       for (const log of logs) {
         const deviceUserId = this.getLogDeviceUserId(log);
         if (deviceUserId == null) continue;
@@ -469,7 +728,6 @@ export class DeviceManager extends EventEmitter {
         log.timestamp = checkInTime;
 
         // Fast-path memory skip based on watermark
-        // If this log is older than 24 hours prior to our latest saved log, it's already processed.
         if (watermarkTime && checkInTime < watermarkTime) {
           continue;
         }
@@ -478,50 +736,72 @@ export class DeviceManager extends EventEmitter {
         const key = this.makeKey(deviceUserId, checkInTime);
         if (this.processedKeys.has(key)) continue;
 
-        // Check database (persistent dedup)
-        let isProcessed = false;
-        if (this.prisma) {
-          isProcessed = await isAttendanceLogProcessed({
-            prisma: this.prisma,
-            deviceUserId,
-            deviceLogId: log.deviceLogId ?? (log.id ? Number(log.id) : null),
-            checkInTime,
-            method: log.method ?? "BIOMETRIC",
-          });
+        // Check batch-loaded DB keys (single query, not N+1)
+        if (existingKeysSet.has(key)) {
+          this.processedKeys.add(key);
+          continue;
         }
 
-        if (!isProcessed) {
-          unprocessedLogs.push(log);
-        }
-
+        unprocessedLogs.push(log);
         this.processedKeys.add(key);
+      }
+
+      // Evict oldest keys if processedKeys grows too large
+      if (this.processedKeys.size > DeviceManager.MAX_PROCESSED_KEYS) {
+        const excess = this.processedKeys.size - DeviceManager.MAX_PROCESSED_KEYS;
+        const iter = this.processedKeys.values();
+        for (let i = 0; i < excess; i++) {
+          this.processedKeys.delete(iter.next().value!);
+        }
       }
 
       // Emit events for the bridge to process
       if (unprocessedLogs.length > 0) {
         this.emit('attendance', unprocessedLogs, true);
+
+        // Auto-mark enrolled for all unique users in this sync batch
+        const uniqueUsers = Array.from(new Set(unprocessedLogs.map(l => this.getLogDeviceUserId(l)).filter((id): id is number => id != null)));
+        for (const userId of uniqueUsers) {
+          try {
+            await this.ensureFingerprintEnrolled(userId);
+          } catch (err) {
+            deviceLogger.error(`Failed to auto-enroll fingerprint for ${userId} during bulk sync`, err);
+          }
+        }
       }
 
-      // Mark all processed logs in the database
-      for (const log of unprocessedLogs) {
-        const deviceUserId = this.getLogDeviceUserId(log);
-        const checkInTime = this.getLogTimestamp(log, true);
-        log.record_time = checkInTime;
-        log.recordTime = checkInTime;
-        log.timestamp = checkInTime;
+      // Batch-insert all processed logs in a single transaction
+      if (this.prisma && unprocessedLogs.length > 0) {
+        const upsertOps = unprocessedLogs.map((log) => {
+          const deviceUserId = this.getLogDeviceUserId(log) ?? 0;
+          const checkInTime = this.getLogTimestamp(log, true);
+          const method = log.method ?? "BIOMETRIC";
+          const normalizedTime = new Date(checkInTime);
+          normalizedTime.setMilliseconds(0);
 
-        if (this.prisma && deviceUserId != null) {
-          try {
-            await recordDeviceAttendanceLog({
-              prisma: this.prisma,
+          return this.prisma.deviceAttendanceLog.upsert({
+            where: {
+              unique_device_attendance_time: {
+                deviceUserId,
+                checkInTime: normalizedTime,
+                method,
+              },
+            },
+            update: {},
+            create: {
               deviceUserId,
-              deviceLogId: log.deviceLogId ?? (log.id ? Number(log.id) : null),
-              checkInTime,
-              method: log.method ?? "BIOMETRIC",
-            });
-          } catch {
-            // ignore duplicate errors
-          }
+              deviceLogId: log.deviceLogId ?? (log.id ? Number(log.id) : undefined),
+              checkInTime: normalizedTime,
+              method,
+            },
+          });
+        });
+
+        try {
+          await this.prisma.$transaction(upsertOps);
+        } catch (err) {
+          // Individual duplicates are handled by upsert; log unexpected errors
+          deviceLogger.warn('Batch attendance log insert warning', err);
         }
       }
 
@@ -565,9 +845,14 @@ export class DeviceManager extends EventEmitter {
           // Try starting real-time if not enabled yet
           if (!this.realtimeEnabled) {
             try {
-              await this.client.startRealTimeLogs((record) => {
-                this.processRealTimeAttendance(record).catch(err => deviceLogger.error('Real-time log error', err));
-              });
+              await this.client.startRealTimeLogs(
+                (record) => {
+                  this.processRealTimeAttendance(record).catch(err => deviceLogger.error('Real-time log error', err));
+                },
+                (userId) => {
+                  this.addRealTimeFingerprint(userId).catch(err => deviceLogger.error('Real-time enroll error', err));
+                }
+              );
               this.realtimeEnabled = true;
               deviceLogger.info('Real-time event listener registered successfully');
             } catch (err) {

@@ -6,7 +6,7 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
       take: limit,
       orderBy: { checkInTime: 'desc' },
       include: {
-        member: true
+        member: { select: { id: true, firstName: true, lastName: true, phone: true, cnic: true, email: true, employeeNo: true, biometricId: true } }
       }
     });
   });
@@ -14,8 +14,9 @@ export function registerAttendanceHandlers(ipcMain: any, prisma: any) {
   ipcMain.handle('attendance:getAll', async () => {
     return await prisma.attendance.findMany({
       orderBy: { checkInTime: 'desc' },
+      take: 5000,
       include: {
-        member: true
+        member: { select: { id: true, firstName: true, lastName: true, phone: true, cnic: true, email: true, employeeNo: true, biometricId: true } }
       }
     });
   });

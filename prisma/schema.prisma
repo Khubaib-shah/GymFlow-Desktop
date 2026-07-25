@@ -44,6 +44,9 @@ model Member {
   attendances  Attendance[]
   payments     Payment[]
   fingerprints Fingerprint[]
+
+  @@index([status, membershipEnd])
+  @@index([employeeNo])
 }
 
 model Trainer {
@@ -77,6 +80,9 @@ model Fingerprint {
   trainerId String?
   member    Member?  @relation(fields: [memberId], references: [id], onDelete: Cascade)
   trainer   Trainer? @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@index([trainerId])
 }
 
 model MembershipPlan {
@@ -98,6 +104,9 @@ model Attendance {
   checkOutTime DateTime?
   method       String    @default("BIOMETRIC") // BIOMETRIC, MANUAL
   createdAt    DateTime  @default(now())
+
+  @@index([memberId])
+  @@index([checkInTime(sort: Desc)])
 }
 
 model Payment {
@@ -110,6 +119,9 @@ model Payment {
   method      String   @default("CASH") // CASH, ONLINE
   notes       String?
   createdAt   DateTime @default(now())
+
+  @@index([memberId])
+  @@index([paymentDate(sort: Desc)])
 }
 
 model TrainerAttendance {
@@ -120,6 +132,9 @@ model TrainerAttendance {
   checkOutTime DateTime?
   method       String    @default("MANUAL")
   createdAt    DateTime  @default(now())
+
+  @@index([trainerId])
+  @@index([checkInTime(sort: Desc)])
 }
 
 /// Tracks which attendance logs have been synced from the biometric device.
@@ -134,4 +149,5 @@ model DeviceAttendanceLog {
 
   @@unique([deviceUserId, deviceLogId], name: "unique_device_attendance")
   @@unique([deviceUserId, checkInTime, method], name: "unique_device_attendance_time")
+  @@index([checkInTime(sort: Desc)])
 }

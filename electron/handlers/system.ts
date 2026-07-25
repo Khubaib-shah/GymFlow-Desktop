@@ -18,8 +18,24 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: Pri
     if (canceled || !savePath) return { success: false, error: 'User canceled' };
 
     try {
+      // Flush WAL into the main DB file so the backup is self-contained
+      try {
+        await prisma.$executeRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch (walErr) {
+        console.warn('WAL checkpoint warning (non-fatal):', walErr);
+      }
+
       await prisma.$disconnect();
       fs.copyFileSync(dbPath, savePath);
+
+      // Copy WAL/SHM files as fallback if they still exist after checkpoint
+      if (fs.existsSync(`${dbPath}-wal`)) {
+        fs.copyFileSync(`${dbPath}-wal`, `${savePath}-wal`);
+      }
+      if (fs.existsSync(`${dbPath}-shm`)) {
+        fs.copyFileSync(`${dbPath}-shm`, `${savePath}-shm`);
+      }
+
       await prisma.$connect();
       return { success: true, filePath: savePath };
     } catch (error: any) {
@@ -46,12 +62,38 @@ export function registerSystemHandlers(ipcMain: any, dbPath: string, prisma: Pri
     if (canceled || filePaths.length === 0) return { success: false, error: 'User canceled' };
 
     try {
+      // Create a temporary connection to verify the backup file is valid SQLite
+      const sqlite3 = require('sqlite3');
+      const tempDb = new sqlite3.Database(filePaths[0]);
+      
+      const isOk = await new Promise((resolve) => {
+        tempDb.get("PRAGMA integrity_check", (err: any, row: any) => {
+          if (err) resolve(false);
+          resolve(row && row.integrity_check === 'ok');
+        });
+      });
+      
+      tempDb.close();
+
+      if (!isOk) {
+        return { success: false, error: 'The selected backup file is corrupted or invalid.' };
+      }
+
       await prisma.$disconnect();
 
       if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
       if (fs.existsSync(`${dbPath}-shm`)) fs.unlinkSync(`${dbPath}-shm`);
 
       fs.copyFileSync(filePaths[0], dbPath);
+      
+      // Also restore WAL/SHM if they were packaged with the backup
+      if (fs.existsSync(`${filePaths[0]}-wal`)) {
+        fs.copyFileSync(`${filePaths[0]}-wal`, `${dbPath}-wal`);
+      }
+      if (fs.existsSync(`${filePaths[0]}-shm`)) {
+        fs.copyFileSync(`${filePaths[0]}-shm`, `${dbPath}-shm`);
+      }
+
       app.relaunch();
       app.quit();
       return { success: true };

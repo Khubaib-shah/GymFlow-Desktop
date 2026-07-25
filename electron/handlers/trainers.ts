@@ -20,6 +20,7 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
         _count: {
           select: { members: true }
         },
+        fingerprints: true,
         members: {
           select: {
             id: true,
@@ -105,6 +106,15 @@ export function registerTrainersHandlers(ipcMain: any, prisma: any) {
 
       await deviceManager.addUser(userPayload);
       deviceSynced = true;
+
+      try {
+        await deviceManager.startEnrollment(nextEmployeeNo as number, 0);
+      } catch (enrollErr: any) {
+        deviceLogger.warn("Failed to auto-start enrollment", {
+          employeeNo: nextEmployeeNo,
+          error: enrollErr.message,
+        });
+      }
 
 
       // Update sync flag in SQLite

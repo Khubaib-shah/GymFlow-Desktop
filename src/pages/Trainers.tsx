@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { useDialog } from '../components/DialogProvider';
 import { Pagination } from '../components/Pagination';
+import { FingerprintSelector } from '../components/FingerprintSelector';
 
 // Utility functions for masking and formatting
 const formatCNIC = (value: string) => {
@@ -26,6 +28,8 @@ const calculateAge = (dob: string) => {
 };
 
 export default function Trainers() {
+
+  const { showAlert, showConfirm } = useDialog();
   const [trainers, setTrainers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -35,12 +39,16 @@ export default function Trainers() {
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
 
   // Profile modal state
   const [profileTrainer, setProfileTrainer] = useState<any>(null);
+  const [isSelectingFinger, setIsSelectingFinger] = useState(false);
+  const [fingerprintTrainer, setFingerprintTrainer] = useState<any>(null);
 
   const fetchTrainers = async () => {
     setLoading(true);
@@ -51,6 +59,14 @@ export default function Trainers() {
 
   useEffect(() => {
     fetchTrainers();
+
+    const handleTrainerUpdated = () => {
+      fetchTrainers();
+    };
+    window.addEventListener('gymflow:trainer_updated', handleTrainerUpdated);
+    return () => {
+      window.removeEventListener('gymflow:trainer_updated', handleTrainerUpdated);
+    };
   }, []);
 
   const openModal = (trainer?: any) => {
@@ -78,6 +94,7 @@ export default function Trainers() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMsg('');
 
     // Validations
@@ -108,20 +125,68 @@ export default function Trainers() {
     if (dataToSave.dob) dataToSave.dob = new Date(dataToSave.dob).toISOString();
     else dataToSave.dob = null;
 
-    if (editingId) {
-      const { id, createdAt, updatedAt, _count, members, fingerprints, attendances, deviceSynced, employeeNo, ...updateData } = dataToSave;
-      await (window as any).api.trainers.update(editingId, updateData);
-    } else {
-      await (window as any).api.trainers.create(dataToSave);
+    setIsSubmitting(true);
+    try {
+      if (editingId) {
+        const { id, createdAt, updatedAt, _count, members, fingerprints, attendances, deviceSynced, employeeNo, ...updateData } = dataToSave;
+        await (window as any).api.trainers.update(editingId, updateData);
+      } else {
+        const newTrainer = await (window as any).api.trainers.create(dataToSave);
+        if (newTrainer && newTrainer.deviceSynced === true) {
+          await showAlert("Trainer synced to device. Device is ready for fingerprint enrollment. Please place finger on the device 3 times.");
+        } else if (newTrainer && newTrainer.deviceSynced === false && newTrainer.deviceError) {
+          await showAlert(`⚠️ Trainer saved locally but could not sync to device.\n\nReason: ${newTrainer.deviceError}`);
+        }
+      }
+      setIsModalOpen(false);
+      fetchTrainers();
+    } catch (err: any) {
+      setErrorMsg(err.message || "An error occurred while saving.");
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsModalOpen(false);
-    fetchTrainers();
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this trainer?')) {
-      await (window as any).api.trainers.delete(id);
-      fetchTrainers();
+    if (await showConfirm('Are you sure you want to delete this trainer?')) {
+      setDeletingId(id);
+      try {
+        await (window as any).api.trainers.delete(id);
+        await fetchTrainers();
+      } finally {
+        setDeletingId(null);
+      }
+    }
+  };
+
+  const [syncingUserId, setSyncingUserId] = useState<number | null>(null);
+
+  const handleEnrollTrainer = async (trainer: any) => {
+    if (!trainer.employeeNo) return;
+    setSyncingUserId(trainer.employeeNo);
+    try {
+      await (window as any).api.device.syncUser(trainer.employeeNo);
+      const updatedTrainer = await (window as any).api.trainers.getById(trainer.id);
+      setFingerprintTrainer(updatedTrainer || trainer);
+    } catch (e: any) {
+      console.warn("Could not fetch latest fingerprints", e);
+      setFingerprintTrainer(trainer);
+    } finally {
+      setSyncingUserId(null);
+      setIsSelectingFinger(true);
+    }
+  };
+
+  const startDeviceEnrollment = async (fingerIndex: number) => {
+    if (!fingerprintTrainer || !fingerprintTrainer.employeeNo) return;
+    setIsSelectingFinger(false);
+    try {
+      await (window as any).api.device.startEnrollment(fingerprintTrainer.employeeNo, fingerIndex);
+      await showAlert(`Device is ready for fingerprint enrollment. Please place finger ${fingerIndex} on the device 3 times.`);
+    } catch (error: any) {
+      await showAlert(`Failed to start enrollment: ${error.message}`);
+    } finally {
+      setFingerprintTrainer(null);
     }
   };
 
@@ -158,74 +223,87 @@ export default function Trainers() {
           trainers
             .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
             .map(trainer => (
-            <div
-              key={trainer.id}
-              onClick={() => setProfileTrainer(trainer)}
-              className="glass rounded-xl p-6 border border-[#2a2e37] flex flex-col items-center text-center relative group cursor-pointer hover:border-primary-500/40 transition-colors"
-            >
-              <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-500 mb-4 p-1 shadow-lg shadow-purple-500/20">
-                <div className="w-full h-full bg-[#13151a] rounded-full flex items-center justify-center text-2xl font-bold text-white">
-                  {trainer.firstName[0]}{trainer.lastName ? trainer.lastName[0] : ''}
+              <div
+                key={trainer.id}
+                onClick={() => setProfileTrainer(trainer)}
+                className="glass rounded-xl p-6 border border-[#2a2e37] flex flex-col items-center text-center relative group cursor-pointer hover:border-primary-500/40 transition-colors"
+              >
+                <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-500 mb-4 p-1 shadow-lg shadow-purple-500/20">
+                  <div className="w-full h-full bg-[#13151a] rounded-full flex items-center justify-center text-2xl font-bold text-white">
+                    {trainer.firstName[0]}{trainer.lastName ? trainer.lastName[0] : ''}
+                  </div>
                 </div>
-              </div>
-              <h3 className="text-lg font-bold text-white">{trainer.firstName} {trainer.lastName || ''}</h3>
-              <p className="text-sm text-primary-400 font-medium mt-1">{trainer.specialty || 'General Fitness'}</p>
+                <h3 className="text-lg font-bold text-white">{trainer.firstName} {trainer.lastName || ''}</h3>
+                <p className="text-sm text-primary-400 font-medium mt-1">{trainer.specialty || 'General Fitness'}</p>
 
-              <div className="w-full h-px bg-gradient-to-r from-transparent via-[#2a2e37] to-transparent my-4"></div>
+                <div className="w-full h-px bg-gradient-to-r from-transparent via-[#2a2e37] to-transparent my-4"></div>
 
-              <div className="flex justify-around w-full text-sm">
-                <div>
-                  <div className="text-gray-400">Assigned</div>
-                  <div className="font-semibold text-white">{trainer._count?.members || 0} Members</div>
-                </div>
-                {trainer.phone && (
+                <div className="flex justify-around w-full text-sm">
                   <div>
-                    <div className="text-gray-400">Phone</div>
-                    <div className="font-semibold text-white text-xs">{trainer.phone}</div>
+                    <div className="text-gray-400">Assigned</div>
+                    <div className="font-semibold text-white">{trainer._count?.members || 0} Members</div>
+                  </div>
+                  {trainer.phone && (
+                    <div>
+                      <div className="text-gray-400">Phone</div>
+                      <div className="font-semibold text-white text-xs">{trainer.phone}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Device UID */}
+                {trainer.employeeNo && (
+                  <div className="mt-3 w-full">
+                    <div className="flex items-center justify-center gap-2 text-xs">
+                      <span className="text-gray-500">Device UID:</span>
+                      <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                        {trainer.employeeNo}
+                      </span>
+                      {trainer.deviceSynced ? (
+                        <span className="text-green-400 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                          Synced
+                        </span>
+                      ) : trainer.employeeNo ? (
+                        <span className="text-yellow-400 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
+                          Not Synced
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 )}
-              </div>
 
-              {/* Device UID */}
-              {trainer.employeeNo && (
-                <div className="mt-3 w-full">
-                  <div className="flex items-center justify-center gap-2 text-xs">
-                    <span className="text-gray-500">Device UID:</span>
-                    <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                      {trainer.employeeNo}
-                    </span>
-                    {trainer.deviceSynced ? (
-                      <span className="text-green-400 flex items-center gap-1">
-                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                        Synced
-                      </span>
-                    ) : trainer.employeeNo ? (
-                      <span className="text-yellow-400 flex items-center gap-1">
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>
-                        Not Synced
-                      </span>
-                    ) : null}
-                  </div>
+                {/* Action buttons — shown on hover, stop propagation so they don't open profile */}
+                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {trainer.deviceSynced && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleEnrollTrainer(trainer); }}
+                      disabled={syncingUserId === trainer.employeeNo}
+                      className={`text-gray-400 hover:text-green-400 p-2 bg-[#13151a] rounded-lg ${syncingUserId === trainer.employeeNo ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title="Enroll Fingerprint"
+                    >
+                      {syncingUserId === trainer.employeeNo ? 'Loading...' : 'Enroll'}
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openModal(trainer); }}
+                    className="text-gray-400 hover:text-white p-2 bg-[#13151a] rounded-lg"
+                    title="Edit Trainer"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDelete(trainer.id); }}
+                    disabled={deletingId === trainer.id}
+                    className={`text-gray-400 hover:text-red-400 p-2 bg-[#13151a] rounded-lg ${deletingId === trainer.id ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    title="Delete Trainer"
+                  >
+                    {deletingId === trainer.id ? '...' : 'Del'}
+                  </button>
                 </div>
-              )}
-
-              {/* Action buttons — shown on hover, stop propagation so they don't open profile */}
-              <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={(e) => { e.stopPropagation(); openModal(trainer); }}
-                  className="text-gray-400 hover:text-white p-2 bg-[#13151a] rounded-lg"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDelete(trainer.id); }}
-                  className="text-gray-400 hover:text-red-400 p-2 bg-[#13151a] rounded-lg"
-                >
-                  Del
-                </button>
               </div>
-            </div>
-          ))
+            ))
         )}
       </div>
       <Pagination
@@ -414,11 +492,36 @@ export default function Trainers() {
               </div>
 
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-[#2a2e37]">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="btn-secondary">Cancel</button>
-                <button type="submit" className="btn-primary">Save Trainer</button>
+                <button type="button" onClick={() => setIsModalOpen(false)} disabled={isSubmitting} className="btn-secondary">Cancel</button>
+                <button type="submit" disabled={isSubmitting} className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                  {isSubmitting ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Trainer"
+                  )}
+                </button>
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {isSelectingFinger && fingerprintTrainer && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <FingerprintSelector
+            enrolledFingers={fingerprintTrainer.fingerprints?.map((f: any) => f.fid) || []}
+            onSelectFinger={startDeviceEnrollment}
+            onCancel={() => {
+              setIsSelectingFinger(false);
+              setFingerprintTrainer(null);
+            }}
+          />
         </div>
       )}
     </div>

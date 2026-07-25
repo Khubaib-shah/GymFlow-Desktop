@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
+import { useDialog } from '../components/DialogProvider';
 
 export default function Settings() {
+  const { showAlert, showConfirm } = useDialog();
   const [admissionFee, setAdmissionFee] = useState("4000");
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -89,9 +91,9 @@ export default function Settings() {
     };
   }, []);
 
-  const saveSettings = () => {
+  const saveSettings = async () => {
     localStorage.setItem("admission_fee", admissionFee);
-    alert("Settings saved locally.");
+    await showAlert("Settings saved locally.");
   };
 
   const saveDeviceSettings = async () => {
@@ -106,12 +108,12 @@ export default function Settings() {
         pollInterval: Number(pollInterval),
       });
       if (response?.success) {
-        alert("ZKTeco settings saved and applied.");
+        await showAlert("ZKTeco settings saved and applied.");
       } else {
-        alert(response?.error || "Unable to save ZKTeco settings.");
+        await showAlert(response?.error || "Unable to save ZKTeco settings.");
       }
     } catch (err: any) {
-      alert(err?.message || "Unable to save ZKTeco settings.");
+      await showAlert(err?.message || "Unable to save ZKTeco settings.");
     } finally {
       setSaving(false);
     }
@@ -194,21 +196,21 @@ export default function Settings() {
   const handleBackup = async () => {
     const res = await (window as any).api.system.backupDb();
     if (res.success) {
-      alert(`Database successfully backed up to:\n${res.filePath}`);
+      await showAlert(`Database successfully backed up to:\n${res.filePath}`);
     } else {
-      if (res.error !== "User canceled") alert(`Backup failed: ${res.error}`);
+      if (res.error !== "User canceled") await showAlert(`Backup failed: ${res.error}`);
     }
   };
 
   const handleRestore = async () => {
     if (
-      confirm(
+      await showConfirm(
         "Warning: Restoring will overwrite the current database and restart the application. Continue?",
       )
     ) {
       const res = await (window as any).api.system.restoreDb();
       if (!res.success && res.error !== "User canceled") {
-        alert(`Restore failed: ${res.error}`);
+        await showAlert(`Restore failed: ${res.error}`);
       }
     }
   };
@@ -221,10 +223,10 @@ export default function Settings() {
         setShowResetModal(false);
         window.location.reload();
       } else {
-        alert(`Reset failed: ${res.error}`);
+        await showAlert(`Reset failed: ${res.error}`);
       }
     } catch (err: any) {
-      alert(`Reset failed: ${err.message}`);
+      await showAlert(`Reset failed: ${err.message}`);
     } finally {
       setResetting(false);
     }

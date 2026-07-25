@@ -239,6 +239,28 @@ export class ZKClient {
     });
   }
 
+  async getUserTemplate(userId: string, fid: number): Promise<any> {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        const res = (await this.withTimeout(
+          this.client.getUserTemplate(userId, fid),
+          10000,
+        )) as any;
+        return res;
+      } catch (err: any) {
+        let errMsg = "";
+        if (err instanceof Error) errMsg = err.message;
+        else if (err && err.err instanceof Error) errMsg = err.err.message;
+        else if (err && typeof err.err === 'string') errMsg = err.err;
+        else errMsg = typeof err === 'string' ? err : JSON.stringify(err);
+
+        deviceLogger.error(`Error in getUserTemplate for user ${userId}, finger ${fid}: ${errMsg}`);
+        throw err;
+      }
+    });
+  }
+
   async getAttendance(): Promise<DeviceAttendancePayload[]> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
@@ -339,6 +361,42 @@ export class ZKClient {
     });
   }
 
+  async deleteFinger(uid: number, fid: number): Promise<void> {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt16LE(uid, 0);
+        buf.writeUInt16LE(fid, 2);
+        const ztcp = (this.client as any).ztcp;
+        if (!ztcp) throw new Error("Underlying TCP connection is not available");
+
+        await this.withTimeout(
+          ztcp.executeCmd(19, buf), // CMD_DELETE_USERTEMP = 19
+          5000,
+        );
+        await this.withTimeout(
+          ztcp.refreshData(),
+          5000,
+        );
+      } catch (err) {
+        deviceLogger.error("Failed to delete fingerprint", err);
+        throw err;
+      }
+    });
+  }
+
+  async freeData(): Promise<void> {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        await this.withTimeout(this.client.freeData(), 2000);
+      } catch (err) {
+        deviceLogger.warn("freeData timeout or error", err);
+      }
+    });
+  }
+
   async clearAttendance(): Promise<void> {
     if (!this.client) throw new Error("Not connected to device");
     return this.queueCommand(async () => {
@@ -363,6 +421,33 @@ export class ZKClient {
       } catch (error) {
         throw new Error(
           `Failed to restart device: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    });
+  }
+
+  async startEnrollment(userId: number | string, fingerIndex: number = 0): Promise<void> {
+    if (!this.client) throw new Error("Not connected to device");
+    return this.queueCommand(async () => {
+      try {
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_CANCELCAPTURE, Buffer.from("")),
+          5000,
+        );
+
+        const payload = Buffer.alloc(26);
+        payload.write(String(userId), 0, 24, "ascii");
+        payload.writeUInt8(fingerIndex, 24);
+        payload.writeUInt8(1, 25); // Flag for enrollment
+
+        await this.withTimeout(
+          this.client.executeCmd(COMMANDS.CMD_STARTENROLL, payload),
+          10000,
+        );
+        deviceLogger.info(`Triggered remote enrollment for user ${userId}, finger ${fingerIndex}`);
+      } catch (error) {
+        throw new Error(
+          `Failed to start remote enrollment: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     });
@@ -402,6 +487,7 @@ export class ZKClient {
    */
   async startRealTimeLogs(
     onAttendance: (record: { userId: string; attTime: Date; exactTime: string }) => void,
+    onEnrollment?: (userId: string) => void,
   ): Promise<void> {
     this.stopRealTimeLogs();
 
@@ -410,34 +496,72 @@ export class ZKClient {
     }
 
     try {
-      await this.client.getRealTimeLogs((log: any) => {
+      // Send command to start real-time logs. We ignore the callback because
+      // zklib-ts has a bug where it returns undefined for EF_ATTLOG (attendance) events.
+      await this.client.getRealTimeLogs(() => {});
+
+      // Access the underlying TCP socket to parse the events manually
+      const socket = (this.client as any).ztcp?.socket || (this.client as any)._zkTcp?.socket;
+      if (!socket) {
+        throw new Error("Could not access underlying device socket for real-time logs");
+      }
+
+      let unProcessed = Buffer.alloc(0);
+
+      const dataHandler = (data: Buffer) => {
         try {
-          if (log.event === 1 && log.payload) { // EF_ATTLOG
-            const buffer = log.payload;
-            const userId = buffer.subarray(0, 24).toString("ascii").split("\0").shift();
-            if (!userId) return;
+          unProcessed = Buffer.concat([unProcessed, data]);
+          while (unProcessed.length > 8) {
+            const payloadSize = unProcessed.readUInt32LE(4);
+            if (unProcessed.length < payloadSize + 8) {
+              break; // Wait for the rest of the packet
+            }
 
-            // Read date components directly from buffer bytes
-            const year = buffer.readUInt8(26) + 2000;
-            const month = buffer.readUInt8(27);
-            const day = buffer.readUInt8(28);
-            const hour = buffer.readUInt8(29);
-            const minute = buffer.readUInt8(30);
-            const second = buffer.readUInt8(31);
+            const packet = unProcessed.subarray(0, payloadSize + 8);
+            unProcessed = unProcessed.subarray(payloadSize + 8);
 
-            const attTime = new Date(year, month - 1, day, hour, minute, second);
+            const commandId = packet.readUIntLE(8, 2);
+            if (commandId === 500) { // CMD_REG_EVENT
+              const eventId = packet.readUIntLE(12, 2); // Event type is stored where sessionId normally is
+              if (eventId === 1) { // EF_ATTLOG (Attendance Log)
+                const payload = packet.subarray(16);
+                const userId = payload.subarray(0, 24).toString("ascii").split("\0").shift();
+                if (!userId) continue;
 
-            const ampm = hour >= 12 ? "pm" : "am";
-            const formattedHours = hour % 12 || 12;
-            const exactTime = `${formattedHours}:${minute.toString().padStart(2, "0")}:${second.toString().padStart(2, "0")} ${ampm}`;
+                const year = payload.readUInt8(26) + 2000;
+                const month = payload.readUInt8(27);
+                const day = payload.readUInt8(28);
+                const hour = payload.readUInt8(29);
+                const minute = payload.readUInt8(30);
+                const second = payload.readUInt8(31);
 
-            onAttendance({ userId, attTime, exactTime });
+                const attTime = new Date(year, month - 1, day, hour, minute, second);
+                const ampm = hour >= 12 ? "pm" : "am";
+                const formattedHours = hour % 12 || 12;
+                const exactTime = `${formattedHours}:${minute.toString().padStart(2, "0")}:${second.toString().padStart(2, "0")} ${ampm}`;
+
+                onAttendance({ userId, attTime, exactTime });
+              } else if (eventId === 4 || eventId === 5) { // EF_ENROLLUSER (4) or EF_ENROLLFINGER (5)
+                const payload = packet.subarray(16);
+                const userId = payload.subarray(0, 24).toString("ascii").split("\0").shift();
+                if (userId && onEnrollment) {
+                  onEnrollment(userId);
+                }
+              }
+            }
           }
         } catch (err) {
-          deviceLogger.error("Error processing real-time log", err);
+          deviceLogger.error("Error processing real-time log from socket", err);
         }
-      });
-      deviceLogger.info("Real-time event listener registered successfully");
+      };
+
+      socket.on("data", dataHandler);
+
+      this.realTimeCleanup = () => {
+        socket.off("data", dataHandler);
+      };
+
+      deviceLogger.info("Real-time event listener registered successfully via socket hook");
     } catch (err) {
       throw new Error(`Failed to register real-time logs: ${err}`);
     }

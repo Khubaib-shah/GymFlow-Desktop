@@ -19,7 +19,7 @@ export default function DashboardLayout() {
       icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
     },
     {
-      name: "Plans",
+      name: "Memberships",
       path: "/plans",
       icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
     },
@@ -89,8 +89,9 @@ export default function DashboardLayout() {
         <div className="p-4 border-t border-[#2a2e37]">
           <button
             onClick={() => {
-              localStorage.removeItem("isAuthenticated");
-              window.location.reload();
+              (window as any).api.auth.setSession(false).then(() => {
+                window.location.reload();
+              });
             }}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-400 hover:text-white hover:bg-red-500/10 hover:text-red-400 w-full transition-colors"
           >

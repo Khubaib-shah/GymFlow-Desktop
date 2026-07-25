@@ -41,17 +41,17 @@ export function registerMembersHandlers(
       for (const m of expiredMembers) {
         if (m.employeeNo) {
           const name = `${m.firstName} ${m.lastName || ""}`.trim();
-          try {
-            await deviceManager.updateUser({
-              userId: m.employeeNo,
-              name,
-              enabled: false,
-            });
+          // Fire-and-forget: don't block the UI response waiting for device TCP calls
+          deviceManager.updateUser({
+            userId: m.employeeNo,
+            name,
+            enabled: false,
+          }).then(() => {
             deviceLogger.info("Auto-disabled expired member on device", {
               employeeNo: m.employeeNo,
               name,
             });
-          } catch (err: any) {
+          }).catch((err: any) => {
             deviceLogger.error(
               "Failed to auto-disable expired member on device",
               {
@@ -59,7 +59,7 @@ export function registerMembersHandlers(
                 error: err.message,
               },
             );
-          }
+          });
         }
       }
     }
@@ -76,8 +76,8 @@ export function registerMembersHandlers(
 
     return await prisma.member.findMany({
       include: {
-        trainer: true,
-        plan: true,
+        trainer: { select: { id: true, firstName: true, lastName: true, specialty: true } },
+        plan: { select: { id: true, name: true, durationDays: true, price: true } },
         fingerprints: true,
       },
       orderBy: { createdAt: "desc" },
@@ -179,6 +179,14 @@ export function registerMembersHandlers(
       await deviceManager.addUser(userPayload);
       deviceSynced = true;
 
+      try {
+        await deviceManager.startEnrollment(nextEmployeeNo as number, 0);
+      } catch (enrollErr: any) {
+        deviceLogger.warn("Failed to auto-start enrollment", {
+          employeeNo: nextEmployeeNo,
+          error: enrollErr.message,
+        });
+      }
 
       // Update sync flag in SQLite
       await prisma.member.update({
@@ -357,7 +365,9 @@ export function registerMembersHandlers(
   });
 
   ipcMain.handle("members:getPhotoPath", async (_: any, filename: string) => {
-    return path.join(userDataPath, "media", filename);
+    // Sanitize filename to prevent path traversal attacks (e.g. "../../secrets.txt")
+    const safeName = path.basename(filename);
+    return path.join(userDataPath, "media", safeName);
   });
 
   ipcMain.handle("members:getDeviceSyncStatus", async () => {
